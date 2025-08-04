@@ -981,23 +981,30 @@ elif page == "Query Expert":
         else:
             st.warning("No clients found for this expert. Please create client-specific memory first.")
     
-    # Initialize chat history
-    if "messages" not in st.session_state:
-        st.session_state.messages = []
-    
-    # Display chat messages
-    for message in st.session_state.messages:
-        with st.chat_message(message["role"]):
-            st.write(message["content"])
-    
-    # Accept user input
-    if prompt := st.chat_input("Ask your question..."):
-        # Add user message to chat history
-        st.session_state.messages.append({"role": "user", "content": prompt})
+    # Create a unique key for each expert and memory type combination
+    if selected_expert:
+        # Create a unique session state key for this expert and memory type
+        chat_key = f"messages_{selected_expert}_{memory_type}"
+        if selected_client and memory_type == "Use client memory":
+            chat_key += f"_{selected_client}"
+            
+        # Initialize chat history for this specific combination if it doesn't exist
+        if chat_key not in st.session_state:
+            st.session_state[chat_key] = []
         
-        # Display user message in chat
-        with st.chat_message("user"):
-            st.write(prompt)
+        # Display chat messages for this specific combination
+        for message in st.session_state[chat_key]:
+            with st.chat_message(message["role"]):
+                st.write(message["content"])
+        
+        # Accept user input
+        if prompt := st.chat_input("Ask your question..."):
+            # Add user message to this specific chat history
+            st.session_state[chat_key].append({"role": "user", "content": prompt})
+            
+            # Display user message in chat
+            with st.chat_message("user"):
+                st.write(prompt)
         
         # Get response from API
         if selected_expert:
@@ -1013,7 +1020,7 @@ elif page == "Query Expert":
             if api_memory_type == "client" and not selected_client:
                 with st.chat_message("assistant"):
                     st.error("Please select a client for client-specific memory.")
-                    st.session_state.messages.append({"role": "assistant", "content": "Please select a client for client-specific memory."})
+                    st.session_state[chat_key].append({"role": "assistant", "content": "Please select a client for client-specific memory."})
             else:
                 with st.spinner("Thinking..."):
                     result, status_code = query_expert(
@@ -1027,14 +1034,14 @@ elif page == "Query Expert":
                     with st.chat_message("assistant"):
                         if status_code == 200:
                             response = result.get("response", "I don't have an answer for that.")
-                            st.write(response)
+                            st.write(response["text"])
                             # Add assistant response to chat history
-                            st.session_state.messages.append({"role": "assistant", "content": response})
+                            st.session_state[chat_key].append({"role": "assistant", "content": response["text"]})
                         else:
                             error_msg = f"Error: {result.get('error', 'Unknown error')}"
                             st.error(error_msg)
                             # Add error response to chat history
-                            st.session_state.messages.append({"role": "assistant", "content": error_msg})
+                            st.session_state[chat_key].append({"role": "assistant", "content": error_msg})
         else:
             with st.chat_message("assistant"):
                 st.write("Please select an expert first.")
