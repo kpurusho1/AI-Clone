@@ -1264,9 +1264,6 @@ async def query_expert(query_request: QueryRequest):
                 # Convert any non-string text to string
                 if 'text' in response and not isinstance(response['text'], str):
                     response['text'] = str(response['text'])
-                citations = response.get('citations')
-                citation_count = len(citations) if citations is not None and isinstance(citations, list) else 0
-                print(f"[DEBUG] query_expert: Response contains {citation_count} citations")
                 print(f"[DEBUG] query_expert: Response text: {response.get('text', '')[:100]}...")
             else:
                 print(f"[DEBUG] query_expert: Response is not a dict, converting to proper format")

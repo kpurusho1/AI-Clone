@@ -72,7 +72,7 @@ async def create_file_for_vector_store(client, document_url: str, document_name:
                 file_extension = '.pdf'
                 print(f"No extension detected, defaulting to: {file_extension}")
             
-            async with httpx.AsyncClient() as httpclient:
+            async with httpx.AsyncClient(timeout=60.0) as httpclient:
                 response = await httpclient.get(document_url)
                 response.raise_for_status()
                 # using OpenAI document to create BytesIO object
