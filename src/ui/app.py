@@ -1005,30 +1005,30 @@ elif page == "Query Expert":
             # Display user message in chat
             with st.chat_message("user"):
                 st.write(prompt)
-        
-        # Get response from API
-        if selected_expert:
-            # Map UI memory type to API memory type
-            api_memory_type = {
-                "Use LLM memory": "llm",
-                "Use domain memory": "domain",
-                "Use expert memory": "expert",
-                "Use client memory": "client"
-            }.get(memory_type, "expert")
             
-            # Check if client is selected when needed
-            if api_memory_type == "client" and not selected_client:
-                with st.chat_message("assistant"):
-                    st.error("Please select a client for client-specific memory.")
-                    st.session_state[chat_key].append({"role": "assistant", "content": "Please select a client for client-specific memory."})
-            else:
-                with st.spinner("Thinking..."):
-                    result, status_code = query_expert(
-                        selected_expert, 
-                        prompt, 
-                        memory_type=api_memory_type, 
-                        client_name=selected_client if api_memory_type == "client" else None
-                    )
+            # Get response from API only if there's a prompt
+            if selected_expert:
+                # Map UI memory type to API memory type
+                api_memory_type = {
+                    "Use LLM memory": "llm",
+                    "Use domain memory": "domain",
+                    "Use expert memory": "expert",
+                    "Use client memory": "client"
+                }.get(memory_type, "expert")
+                
+                # Check if client is selected when needed
+                if api_memory_type == "client" and not selected_client:
+                    with st.chat_message("assistant"):
+                        st.error("Please select a client for client-specific memory.")
+                        st.session_state[chat_key].append({"role": "assistant", "content": "Please select a client for client-specific memory."})
+                else:
+                    with st.spinner("Thinking..."):
+                        result, status_code = query_expert(
+                            selected_expert, 
+                            prompt, 
+                            memory_type=api_memory_type, 
+                            client_name=selected_client if api_memory_type == "client" else None
+                        )
                     
                     # Display assistant response in chat
                     with st.chat_message("assistant"):
