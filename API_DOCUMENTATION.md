@@ -258,7 +258,7 @@ Returns a list of all domains.
 
 #### Get Expert Domain
 ```
-GET /expert_domain/{expert_name}
+GET /experts/{expert_name}/domain
 ```
 Gets the domain name for a specific expert.
 
@@ -309,7 +309,7 @@ Returns a list of all experts.
 
 #### Get Expert Context
 ```
-GET /expert_context/{expert_name}
+GET /experts/{expert_name}/context
 ```
 Gets the context for a specific expert.
 
@@ -322,7 +322,7 @@ Gets the context for a specific expert.
 
 #### Update Expert Context
 ```
-PUT /expert_context
+PUT /experts/context
 ```
 Updates an expert's context.
 
@@ -339,8 +339,8 @@ Updates an expert's context.
 
 #### Update Expert Persona
 ```
-POST /expert_persona
-PUT /expert_persona
+POST /experts/persona/update
+PUT /experts/persona/update
 ```
 Generates a persona from QA data and updates the expert's context.
 
@@ -359,7 +359,7 @@ Generates a persona from QA data and updates the expert's context.
 
 #### Create Expert Domain Vector
 ```
-POST /expert_domain_vector
+POST /vectors/expert-domain
 ```
 Creates or updates vector IDs for an expert based on domain.
 
@@ -377,7 +377,7 @@ Creates or updates vector IDs for an expert based on domain.
 
 #### Update Expert Domain Vector
 ```
-PUT /expert_domain_vector
+POST /vectors/expert-domain/update
 ```
 Updates the preferred vector store ID for an expert.
 
@@ -395,7 +395,7 @@ Updates the preferred vector store ID for an expert.
 
 #### Create Expert Client Vector
 ```
-POST /expert_client_vector
+POST /vectors/expert-client
 ```
 Creates a vector store for an expert with a specific client.
 
@@ -436,7 +436,7 @@ Updates an existing vector store by adding new documents.
 
 #### Delete Vector Memory
 ```
-DELETE /vectors
+DELETE /vectors/memory
 ```
 Deletes a vector memory based on domain, expert, and/or client name.
 
@@ -454,7 +454,7 @@ Deletes a vector memory based on domain, expert, and/or client name.
 
 #### Add Files to Domain Vector
 ```
-POST /domain_files
+POST /vectors/domain/files
 ```
 Adds files to a domain's default vector store.
 
@@ -474,7 +474,7 @@ Adds files to a domain's default vector store.
 
 #### Update Files to Domain Vector
 ```
-PUT /domain_files
+POST /vectors/domain/files/update
 ```
 Updates files in a domain's default vector store.
 
@@ -494,7 +494,7 @@ Updates files in a domain's default vector store.
 
 #### Add Files to Domain Vector from Config
 ```
-POST /domain_files_config
+POST /vectors/domain/files/config
 ```
 Adds files to a domain's default vector store from a configuration file.
 
@@ -515,7 +515,7 @@ Adds files to a domain's default vector store from a configuration file.
 
 #### Add Files to Expert Vector
 ```
-POST /expert_files
+POST /vectors/expert/files
 ```
 Adds files to an expert vector store.
 
@@ -536,7 +536,7 @@ Adds files to an expert vector store.
 
 #### Update Files to Expert Vector
 ```
-PUT /expert_files
+PUT /vectors/expert/files
 ```
 Updates files in an expert vector store.
 
@@ -587,7 +587,7 @@ Gets documents filtered by domain, expert, and client.
 
 #### Initialize Expert Memory
 ```
-POST /initialize_expert_memory
+POST /memory/expert/initialize
 ```
 Initializes an expert's memory by creating domain, adding files, generating persona, and creating expert.
 
@@ -612,7 +612,7 @@ Initializes an expert's memory by creating domain, adding files, generating pers
 
 #### Generate Persona from QA Data
 ```
-POST /generate_persona
+POST /persona/generate
 ```
 Generates a persona summary from QA data.
 
@@ -630,7 +630,7 @@ Generates a persona summary from QA data.
 
 #### Create Assistant
 ```
-POST /assistant
+POST /create_assistant
 ```
 Creates an OpenAI Assistant for a specific expert and memory type.
 
@@ -640,7 +640,7 @@ Creates an OpenAI Assistant for a specific expert and memory type.
 
 #### Create Thread
 ```
-POST /thread
+POST /create_thread
 ```
 Creates a new thread for conversation.
 
