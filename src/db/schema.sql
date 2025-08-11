@@ -2,7 +2,6 @@
 CREATE TABLE IF NOT EXISTS domains (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     domain_name TEXT NOT NULL UNIQUE,
-    default_vector_id TEXT,
     expert_names TEXT[] DEFAULT '{}'::TEXT[]
 );
 
@@ -12,8 +11,6 @@ CREATE TABLE IF NOT EXISTS experts (
     name TEXT NOT NULL,
     domain TEXT NOT NULL,
     context TEXT NOT NULL,
-    default_vector_id TEXT,
-    preferred_vector_id TEXT,
     CONSTRAINT fk_domain
         FOREIGN KEY (domain)
         REFERENCES domains (domain_name)
@@ -80,3 +77,19 @@ $$ LANGUAGE plpgsql;
 
 -- Note: After running this SQL script, create a storage bucket named 'documents'
 -- using the Supabase dashboard Storage section. This cannot be done via SQL.
+
+-- Create Assistants table to track OpenAI assistants
+CREATE TABLE IF NOT EXISTS assistants (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    assistant_id TEXT NOT NULL UNIQUE,
+    expert_name TEXT NOT NULL,
+    memory_type TEXT NOT NULL,
+    client_name TEXT,
+    vector_id TEXT,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    CONSTRAINT fk_expert
+        FOREIGN KEY (expert_name)
+        REFERENCES experts (name)
+        ON DELETE CASCADE
+);

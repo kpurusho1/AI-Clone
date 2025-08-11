@@ -1,20 +1,36 @@
 from fastapi import APIRouter, HTTPException
 from typing import List, Optional
-
+import json
+import os
 from database import supabase
 from models import (
     ExpertCreate, ExpertResponse, ExpertUpdate,
-    QueryRequest, QueryResponse,
-    DeleteVectorIdRequest, DomainCreate, ExpertVectorCreate, ExpertClientVectorCreate,
-    AddFilesToExpertVectorCreate, AddFilesToDomainVectorCreate, VectorStoreQuery,
-    UpdateVectorStoreRequest, DeleteVectorRequest
+    QueryRequest, QueryResponse, QueryResponseContent,
+    DeleteVectorRequest, ExpertVectorUpdate,
+    DomainCreate, AddFilesToDomainVectorCreate, VectorStoreQuery,
+    DomainFilesConfigRequest, PersonaGenerationRequest,
+    ExpertVectorCreate, ExpertClientVectorCreate,
+    AddFilesToExpertVectorCreate, 
+    UpdateVectorStoreRequest, UpdateFilesToDomainVectorCreate,
+    CreateAssistantRequest, CreateAssistantResponse,
+    CreateThreadRequest, CreateThreadResponse,
+    AddMessageRequest, AddMessageResponse,
+    RunThreadRequest, RunThreadResponse,
+    GetRunStatusRequest, GetRunStatusResponse,UpdateFilesToExpertVectorCreate,
+    GetThreadMessagesRequest, GetThreadMessagesResponse,
+    UpdateExpertPersonaRequest,InitializeExpertMemoryRequest, UpdateDomainFilesConfigRequest
 )
+
 from utils import (
     create_vector_store, 
-    add_documents_to_domain_vector_store,
-    add_documents_to_expert_vector_store,
+    add_documents_to_vector_store,
     query_vector_index, delete_vector_index,
-    edit_vector_store, client
+    edit_vector_store, client, delete_files_in_vector_store,
+    # OpenAI Assistant API functions
+    create_assistant, get_or_create_assistant, create_thread,
+    add_message_to_thread, run_thread, get_run_status,
+    get_thread_messages, query_expert_with_assistant,
+    generate_persona_from_qa
 )
 
 router = APIRouter()
@@ -38,11 +54,21 @@ async def create_domain(domain_create: DomainCreate):
         print(f"Domain name after extraction: {domain_name}")
         
         # Check if domain already exists
-        domain_exists = supabase.table("domains").select("domain_name").eq("domain_name", domain_name).execute()
+        domain_exists = supabase.table("domains").select("*").eq("domain_name", domain_name).execute()
         print(f"Domain exists check result: {domain_exists.data}")
         
         if domain_exists.data:
-            raise HTTPException(status_code=400, detail=f"Domain {domain_name} already exists")
+            print(f"Domain {domain_name} already exists, returning existing domain")
+            existing_domain = domain_exists.data[0]
+            # Get vector ID for the existing domain
+            vector_id_result = await get_vector_id(domain_name)
+            vector_id = vector_id_result.get("vector_id") if vector_id_result else None
+            
+            return {
+                "domain_name": existing_domain.get("domain_name"),
+                "vector_id": vector_id,
+                "message": f"Domain {domain_name} already exists"
+            }
         
         # Create vector store with name 'Default_<domain_name>'
         vector_name = f"Default_{domain_name}"
@@ -59,7 +85,6 @@ async def create_domain(domain_create: DomainCreate):
         # Create domain entry in database
         domain_data = {
             "domain_name": domain_name,
-            "default_vector_id": vector_id,
             "expert_names": []
         }
         
@@ -71,10 +96,32 @@ async def create_domain(domain_create: DomainCreate):
         
         if not result.data:
             raise HTTPException(status_code=500, detail="Failed to create domain")
+            
+        # Also add an entry to the vector_stores table if we have a vector_id
+        if vector_id:
+            try:
+                vector_store_data = {
+                    "vector_id": vector_id,
+                    "domain_name": domain_name,
+                    "expert_name": None,  # Default domain vector has no expert
+                    "client_name": None,  # Default domain vector has no client
+                    "owner": "domain",  # Mark as owned by domain
+                    "file_ids": [],  # Start with empty file IDs
+                    "batch_ids": []   # Start with empty batch IDs
+                }
+                
+                print(f"Vector store data to insert: {vector_store_data}")
+                
+                # Insert into vector_stores table
+                vector_result = supabase.table("vector_stores").insert(vector_store_data).execute()
+                print(f"Vector store insert result: {vector_result}")
+            except Exception as e:
+                print(f"Warning: Failed to create vector_stores entry: {str(e)}")
+                # Continue anyway, the domain was created successfully
         
         return {
             "domain_name": domain_name,
-            "default_vector_id": vector_id,
+            "vector_id": vector_id,
             "message": f"Domain {domain_name} created successfully"
         }
     except Exception as e:
@@ -96,72 +143,110 @@ async def get_domains():
         print(f"Error getting domains: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
-# 3. Get default vector ID for a domain - will return default vector store id for a given domain
-@router.get("/domains/{domain_name}/vector_id", response_model=dict)
-async def get_domain_vector_id(domain_name: str):
+# 2.1 Get domain name for an expert
+@router.get("/experts/{expert_name}/domain", response_model=dict)
+async def get_expert_domain(expert_name: str):
     """
-    Get default vector ID for a given domain name
-    """
-    try:
-        print(f"Getting default vector ID for domain: {domain_name}")
-        
-        # Query the domain by name
-        result = supabase.table("domains").select("domain_name, default_vector_id").eq("domain_name", domain_name).execute()
-        print(f"Domain query result: {result.data}")
-        
-        if not result.data:
-            raise HTTPException(status_code=404, detail=f"Domain {domain_name} not found")
-        
-        domain_data = result.data[0]
-        default_vector_id = domain_data.get("default_vector_id")
-        
-        if not default_vector_id:
-            return {
-                "domain_name": domain_name,
-                "default_vector_id": None,
-                "message": f"No default vector ID found for domain {domain_name}"
-            }
-        
-        return {
-            "domain_name": domain_name,
-            "default_vector_id": default_vector_id
-        }
-    except Exception as e:
-        print(f"Error getting domain vector ID: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-# 3.1 Get preferred vector ID for an expert
-@router.get("/experts/{expert_name}/vector_id", response_model=dict)
-async def get_expert_vector_id(expert_name: str):
-    """
-    Get preferred vector ID for a given expert name
+    Get domain name for a given expert name
     """
     try:
-        print(f"Getting preferred vector ID for expert: {expert_name}")
+        print(f"Getting domain for expert: {expert_name}")
         
         # Query the expert by name
-        result = supabase.table("experts").select("name, preferred_vector_id").eq("name", expert_name).execute()
+        result = supabase.table("experts").select("name, domain").eq("name", expert_name).execute()
         print(f"Expert query result: {result.data}")
         
         if not result.data:
             raise HTTPException(status_code=404, detail=f"Expert {expert_name} not found")
         
         expert_data = result.data[0]
-        preferred_vector_id = expert_data.get("preferred_vector_id")
+        domain_name = expert_data.get("domain")
         
-        if not preferred_vector_id:
+        if not domain_name:
             return {
                 "expert_name": expert_name,
-                "preferred_vector_id": None,
-                "message": f"No preferred vector ID found for expert {expert_name}"
+                "domain_name": None,
+                "message": f"No domain associated with expert {expert_name}"
             }
         
         return {
             "expert_name": expert_name,
-            "preferred_vector_id": preferred_vector_id
+            "domain_name": domain_name
         }
     except Exception as e:
-        print(f"Error getting expert vector ID: {str(e)}")
+        print(f"Error getting expert domain: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# 3 Get vector ID based on domain, expert, and client parameters
+@router.get("/vectors/id", response_model=dict)
+async def get_vector_id(domain_name: str, expert_name: Optional[str] = None, client_name: Optional[str] = None):
+    """
+    Get vector ID from the vector_stores table based on provided parameters.
+    - domain_name is mandatory
+    - expert_name is optional (if not provided, gets domain-level vector store)
+    - client_name is optional (if provided with expert_name, gets client-level vector store)
+    """
+    try:
+        print(f"Getting vector ID for domain: {domain_name}, expert: {expert_name}, client: {client_name}")
+        
+        # Build query to find the vector store
+        query = supabase.table("vector_stores").select("*")\
+            .eq("domain_name", domain_name)
+        
+        # Add expert filter based on whether it's provided
+        if expert_name:
+            query = query.eq("expert_name", expert_name)
+        else:
+            query = query.is_("expert_name", "null")
+        
+        # Add client filter based on whether it's provided
+        if client_name:
+            if not expert_name:
+                raise HTTPException(status_code=400, 
+                                  detail="Cannot specify client_name without expert_name")
+            query = query.eq("client_name", client_name)
+        else:
+            query = query.is_("client_name", "null")
+        
+        result = query.execute()
+        print(f"Vector store query result: {result.data}")
+        
+        if not result.data:
+            # Construct appropriate message based on provided parameters
+            if expert_name and client_name:
+                message = f"No vector store found for client {client_name} with expert {expert_name} in domain {domain_name}"
+            elif expert_name:
+                message = f"No vector store found for expert {expert_name} in domain {domain_name}"
+            else:
+                message = f"No vector store found for domain {domain_name}"
+            
+            return {
+                "domain_name": domain_name,
+                "expert_name": expert_name,
+                "client_name": client_name,
+                "vector_id": None,
+                "id": None,
+                "message": message
+            }
+        
+        # Vector store found, return its ID
+        vector_store = result.data[0]
+        vector_id = vector_store.get("vector_id")
+        id = vector_store.get("id")
+        
+        return {
+            "domain_name": domain_name,
+            "expert_name": expert_name,
+            "client_name": client_name,
+            "vector_id": vector_id,
+            "id": id,
+            "message": "Vector store found"
+        }
+    except HTTPException as e:
+        # Re-raise HTTP exceptions
+        raise
+    except Exception as e:
+        print(f"Error getting vector ID: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 # 4. Create expert
@@ -186,21 +271,15 @@ async def create_expert(expert: ExpertCreate):
         if not domain_exists.data:
             raise HTTPException(status_code=404, detail=f"Domain {domain_value} not found")
         
-        # Get domain data
-        domain_data = domain_exists.data[0]
-        
         # Create expert data
         expert_data = {
             "name": expert.name,
-            "domain": domain_value,  # Use the string value instead of the enum
+            "domain": domain_value,
             "context": expert.context
-            # default_vector_id will be set by create_expert_domain_vector
         }
-        print(f"Expert data to insert: {expert_data}")
         
         # Insert expert into database
         result = supabase.table("experts").insert(expert_data).execute()
-        print(f"Insert result: {result}")
         
         if not result.data:
             raise HTTPException(status_code=500, detail="Failed to create expert")
@@ -209,36 +288,31 @@ async def create_expert(expert: ExpertCreate):
         try:
             # First get the current expert_names array
             domain_info = supabase.table("domains").select("expert_names").eq("domain_name", domain_value).execute()
-            print(f"Current domain info: {domain_info.data}")
             
             # Extract the current expert_names or initialize an empty list
             current_experts = domain_info.data[0].get("expert_names", []) if domain_info.data else []
             if current_experts is None:
                 current_experts = []
-            print(f"Current experts: {current_experts}")
             
             # Append the new expert name
             if expert.name not in current_experts:
                 current_experts.append(expert.name)
             
             # Update the domain with the new list
-            update_result = supabase.table("domains").update({"expert_names": current_experts}).eq("domain_name", domain_value).execute()
-            print(f"Domain update result: {update_result}")
+            supabase.table("domains").update({"expert_names": current_experts}).eq("domain_name", domain_value).execute()
         except Exception as domain_update_error:
             print(f"Error updating domain expert_names: {str(domain_update_error)}")
             # Continue anyway, the expert was created successfully
         
-        # Create expert domain vector using the create_expert_domain_vector function
+        # Create expert domain vector
         try:
-            print(f"Creating expert domain vector for {expert.name}")
-            print(f"Use default domain knowledge: {expert.use_default_domain_knowledge}")
             vector_create = ExpertVectorCreate(
                 expert_name=expert.name,
+                domain_name=domain_value,
                 use_default_domain_vector=expert.use_default_domain_knowledge
             )
             vector_result = await create_expert_domain_vector(vector_create)
             print(f"Expert domain vector created: {vector_result}")
-            # No need to update expert with preferred_vector_id as create_expert_domain_vector already does this
         except Exception as vector_error:
             print(f"Error creating expert domain vector: {str(vector_error)}")
             # Continue anyway, the expert was created successfully
@@ -341,44 +415,7 @@ async def update_context(expert_update: ExpertUpdate):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-# 6. Get vector ID for an expert and client combination
-@router.get("/vectors/expert/{expert_name}/client/{client_name}", response_model=dict)
-async def get_expert_client_vector_id(expert_name: str, client_name: str):
-    """
-    Get vector ID for a specific expert and client combination
-    """
-    try:
-        print(f"Getting vector ID for expert: {expert_name} and client: {client_name}")
-        
-        # Query the vector_stores table for the expert-client combination
-        result = supabase.table("vector_stores") \
-            .select("vector_id, expert_name, client_name") \
-            .eq("expert_name", expert_name) \
-            .eq("client_name", client_name) \
-            .execute()
-        print(f"Vector store query result: {result.data}")
-        
-        if not result.data:
-            return {
-                "expert_name": expert_name,
-                "client_name": client_name,
-                "vector_id": None,
-                "message": f"No vector store found for expert {expert_name} and client {client_name}"
-            }
-        
-        vector_store = result.data[0]
-        vector_id = vector_store.get("vector_id")
-        
-        return {
-            "expert_name": expert_name,
-            "client_name": client_name,
-            "vector_id": vector_id
-        }
-    except Exception as e:
-        print(f"Error getting expert-client vector ID: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-# 7. Create vector store for expert and domain - will use default for preferred if bool is true
+# 6. Create vector store for expert and domain - will use default for preferred if bool is true
 @router.post("/vectors/expert-domain", response_model=dict)
 async def create_expert_domain_vector(vector_create: ExpertVectorCreate):
     """
@@ -388,15 +425,7 @@ async def create_expert_domain_vector(vector_create: ExpertVectorCreate):
         print(f"Creating/updating vector IDs for expert: {vector_create.expert_name}")
         print(f"Use default domain vector: {vector_create.use_default_domain_vector}")
         
-        # Check if expert exists and get domain
-        expert_result = supabase.table("experts").select("*").eq("name", vector_create.expert_name).execute()
-        print(f"Expert query result: {expert_result.data}")
-        
-        if not expert_result.data:
-            raise HTTPException(status_code=404, detail=f"Expert {vector_create.expert_name} not found")
-        
-        expert_data = expert_result.data[0]
-        domain_name = expert_data.get("domain")
+        domain_name = vector_create.domain_name
         
         if not domain_name:
             raise HTTPException(status_code=400, detail=f"Expert {vector_create.expert_name} does not have an associated domain")
@@ -404,101 +433,87 @@ async def create_expert_domain_vector(vector_create: ExpertVectorCreate):
         print(f"Domain name from expert record: {domain_name}")
         
         # Get default vector ID for the domain using the existing function
-        try:
-            domain_vector_result = await get_domain_vector_id(domain_name)
-            print(f"Domain vector result: {domain_vector_result}")
-            default_vector_id = domain_vector_result.get("default_vector_id")
+        vector_id_result = await get_vector_id(domain_name)
+        default_vector_id = vector_id_result.get("vector_id") if vector_id_result else None
             
-            if not default_vector_id:
-                raise HTTPException(status_code=400, detail=f"Domain {domain_name} does not have a default vector ID")
-                
-        except HTTPException as e:
-            # Re-raise any HTTP exceptions from get_domain_vector_id
-            raise e
+        if not default_vector_id:
+            raise HTTPException(status_code=400, detail=f"Domain {domain_name} does not have a default vector ID")
         
         # Update expert's vector IDs based on the use_default_domain_vector flag
-        update_data = {"default_vector_id": default_vector_id}
-        
         if vector_create.use_default_domain_vector:
             # Use domain's default vector ID for both default and preferred
-            update_data["preferred_vector_id"] = default_vector_id
-            
-            try:
-                update_result = supabase.table("experts").update(update_data).eq("name", vector_create.expert_name).execute()
-                print(f"Expert update result: {update_result}")
-                
-                return {
-                    "expert_name": vector_create.expert_name,
-                    "domain_name": domain_name,
-                    "default_vector_id": default_vector_id,
-                    "preferred_vector_id": default_vector_id,
-                    "message": f"Expert {vector_create.expert_name} updated with domain's default vector ID"
-                }
-            except Exception as e:
-                print(f"Error updating expert: {str(e)}")
-                raise HTTPException(status_code=500, detail=f"Error updating expert: {str(e)}")
+            expert_vector_id = default_vector_id
         else:
-            # Update default vector ID and create a new vector store for preferred
-            try:
-                # First update the default vector ID
-                update_result = supabase.table("experts").update(update_data).eq("name", vector_create.expert_name).execute()
-                print(f"Expert default vector ID update result: {update_result}")
+            vector_name = f"{vector_create.expert_name}_{domain_name}"
+            print(f"Creating vector store with name: {vector_name}")
+            vector_store = await create_vector_store(client, vector_name)
+            print(f"Vector store created: {vector_store}")
+            expert_vector_id = vector_store.id if hasattr(vector_store, 'id') else None
+            
+        # Update expert's preferred vector ID
+        #if expert_vector_id:
+           
+        if not expert_vector_id:
+            raise HTTPException(status_code=400, detail="Error creating vector store")
+            
+        # Also add an entry to the vector_stores table
+        vector_store_data = {
+            "vector_id": expert_vector_id,
+            "domain_name": domain_name,
+            "expert_name": vector_create.expert_name,
+            "client_name": None,  # Expert vector has no client
+            "owner": "expert",  # Mark as owned by expert
+            "file_ids": [],  # Start with empty file IDs
+            "batch_ids": []   # Start with empty batch IDs
+        }
                 
-                # Then call update_expert_domain_vector to create a new vector store
-                # and update the preferred vector ID
-                return await update_expert_domain_vector(ExpertVectorCreate(expert_name=vector_create.expert_name))
-            except Exception as e:
-                print(f"Error updating expert: {str(e)}")
-                raise HTTPException(status_code=500, detail=f"Error updating expert: {str(e)}")
+        print(f"Vector store data to insert: {vector_store_data}")
+                
+        # Insert into vector_stores table
+        vector_result = supabase.table("vector_stores").insert(vector_store_data).execute()
+        print(f"Vector store insert result: {vector_result}")
+        
+        return {
+            "expert_name": vector_create.expert_name,
+            "domain_name": domain_name,
+            "vector_id": expert_vector_id,
+            "message": f"Expert {vector_create.expert_name} updated with domain's default vector ID"
+        }
     except Exception as e:
         print(f"Error creating expert domain vector: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
-# 8. Update expert domain vector store - update preferred vector store id
+# 7. Update expert domain vector store - update preferred vector store id
 @router.post("/vectors/expert-domain/update", response_model=dict)
-async def update_expert_domain_vector(vector_create: ExpertVectorCreate):
+async def update_expert_domain_vector(vector_create: ExpertVectorUpdate):
     """
     Get or create a vector store for an expert given expert name
     """
     try:
         print(f"Getting or creating vector store for expert: {vector_create.expert_name}")
         
-        # Check if expert exists and get domain
-        expert_result = supabase.table("experts").select("*").eq("name", vector_create.expert_name).execute()
-        print(f"Expert query result: {expert_result.data}")
+        domain_name = vector_create.domain_name
+        vector_id_result = await get_vector_id(domain_name)
+        default_vector_id = vector_id_result.get("vector_id") if vector_id_result else None
         
-        if not expert_result.data:
-            raise HTTPException(status_code=404, detail=f"Expert {vector_create.expert_name} not found")
-        
-        expert_data = expert_result.data[0]
-        domain_name = expert_data.get("domain")
-        preferred_vector_id = expert_data.get("preferred_vector_id")
-        default_vector_id = expert_data.get("default_vector_id")
+        expert_vector_store = await get_vector_id(domain_name, vector_create.expert_name)
+        expert_vector_id = expert_vector_store.get("vector_id")
+        id = expert_vector_store.get("id")
 
-
-        if not domain_name:
-            raise HTTPException(status_code=400, detail=f"Expert {vector_create.expert_name} does not have an associated domain")
-        
         print(f"Domain name from expert record: {domain_name}")
-        print(f"Preferred vector ID from expert record: {preferred_vector_id}")
         
         # If the expert already has a preferred vector ID, return it
-        if preferred_vector_id and preferred_vector_id != default_vector_id:
-            print(f"Using existing preferred vector ID: {preferred_vector_id}")
+        if expert_vector_id and expert_vector_id != default_vector_id and not vector_create.replace_vector:
+            print(f"Using existing preferred vector ID: {expert_vector_id}")
             return {
                 "expert_name": vector_create.expert_name,
                 "domain_name": domain_name,
-                "vector_id": preferred_vector_id,
+                "vector_id": expert_vector_id,
                 "vector_name": f"{vector_create.expert_name}_{domain_name}",
                 "message": f"Using existing vector store for expert {vector_create.expert_name} and domain {domain_name}"
             }
         
-        # Check if domain exists
-        domain_exists = supabase.table("domains").select("*").eq("domain_name", domain_name).execute()
-        print(f"Domain exists check result: {domain_exists.data}")
-        
-        if not domain_exists.data:
-            raise HTTPException(status_code=404, detail=f"Domain {domain_name} not found")
+        delete_vector_memory(vector_id=expert_vector_id, delete_id=id)
         
         # Create vector store with name 'expert_name_domain_name'
         vector_name = f"{vector_create.expert_name}_{domain_name}"
@@ -512,13 +527,26 @@ async def update_expert_domain_vector(vector_create: ExpertVectorCreate):
             print(f"Error creating vector store: {str(e)}")
             raise HTTPException(status_code=500, detail=f"Error creating vector store: {str(e)}")
         
-        # Update expert's preferred vector ID
         if vector_id:
             try:
-                update_result = supabase.table("experts").update({"preferred_vector_id": vector_id}).eq("name", vector_create.expert_name).execute()
-                print(f"Expert update result: {update_result}")
+                # Also add an entry to the vector_stores table
+                vector_store_data = {
+                    "vector_id": vector_id,
+                    "domain_name": domain_name,
+                    "expert_name": vector_create.expert_name,
+                    "client_name": None,  # Expert vector has no client
+                    "owner": "expert",  # Mark as owned by expert
+                    "file_ids": [],  # Start with empty file IDs
+                    "batch_ids": []   # Start with empty batch IDs
+                }
+                
+                print(f"Vector store data to insert: {vector_store_data}")
+                
+                # Insert into vector_stores table
+                vector_result = supabase.table("vector_stores").insert(vector_store_data).execute()
+                print(f"Vector store insert result: {vector_result}")
             except Exception as e:
-                print(f"Error updating expert: {str(e)}")
+                print(f"Error updating expert or creating vector_stores entry: {str(e)}")
                 # Continue anyway, the vector store was created successfully
         
         return {
@@ -532,7 +560,7 @@ async def update_expert_domain_vector(vector_create: ExpertVectorCreate):
         print(f"Error updating expert domain vector: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
-# 9. Create client-specific expert vector store
+# 8. Create client-specific expert vector store
 @router.post("/vectors/expert-client", response_model=dict)
 async def create_expert_client_vector(vector_create: ExpertClientVectorCreate):
     """
@@ -542,54 +570,54 @@ async def create_expert_client_vector(vector_create: ExpertClientVectorCreate):
         print(f"Creating client-specific vector store for expert: {vector_create.expert_name}, client: {vector_create.client_name}")
         
         # Check if expert exists and get domain
-        expert_result = supabase.table("experts").select("*").eq("name", vector_create.expert_name).execute()
-        print(f"Expert query result: {expert_result.data}")
-        
-        if not expert_result.data:
-            raise HTTPException(status_code=404, detail=f"Expert {vector_create.expert_name} not found")
-        
-        expert_data = expert_result.data[0]
-        domain_name = expert_data.get("domain")
-        
+        expert_domain_result = await get_expert_domain(vector_create.expert_name)
+        domain_name = expert_domain_result.get("domain_name") if expert_domain_result else None
         if not domain_name:
             raise HTTPException(status_code=400, detail=f"Expert {vector_create.expert_name} does not have an associated domain")
-        
         print(f"Domain name from expert record: {domain_name}")
-        
-        # Check if domain exists
-        domain_exists = supabase.table("domains").select("*").eq("domain_name", domain_name).execute()
-        print(f"Domain exists check result: {domain_exists.data}")
-        
-        if not domain_exists.data:
-            raise HTTPException(status_code=404, detail=f"Domain {domain_name} not found")
         
         # Create vector store with name 'expert_name_client_name_domain_name'
         vector_name = f"{vector_create.expert_name}_{vector_create.client_name}_{domain_name}"
         print(f"Checking if vector store with name {vector_name} already exists")
         
         # Check if a vector store with this name already exists in the vector_stores table
-        existing_vector = supabase.table("vector_stores").select("*").eq("expert_name", vector_create.expert_name)\
-            .eq("client_name", vector_create.client_name).eq("domain_name", domain_name).execute()
-        
-        if existing_vector.data:
+        existing_vector = await get_vector_id(domain_name, vector_create.expert_name, vector_create.client_name)
+        if existing_vector.get("vector_id"):
             # Vector store already exists, use the existing one
-            print(f"Vector store already exists: {existing_vector.data[0]}")
-            vector_id = existing_vector.data[0].get("vector_id")
-            print(f"Using existing vector store with ID: {vector_id}")
+            vector_id = existing_vector.get("vector_id")
+            print(f"Vector store already exists. Using existing vector store with ID: {vector_id}")
         else:
             # Create a new vector store
             print(f"Creating new vector store with name: {vector_name}")
             try:
                 vector_store = await create_vector_store(client, vector_name)
                 print(f"Vector store created: {vector_store}")
-                vector_id = vector_store.id if hasattr(vector_store, 'id') else None
+                vector_id = vector_store.get("vector_id")
             except Exception as e:
                 print(f"Error creating vector store: {str(e)}")
                 raise HTTPException(status_code=500, detail=f"Error creating vector store: {str(e)}")
         
-        # Store the client-specific vector ID in a new table or add to experts table
-        # For now, we'll just return the vector ID without updating any tables
-        # This could be extended to store client-specific vector IDs in a separate table
+        # Add an entry to the vector_stores table for this client-specific vector
+        if vector_id and not existing_vector.get("vector_id"):
+            try:
+                vector_store_data = {
+                    "vector_id": vector_id,
+                    "domain_name": domain_name,
+                    "expert_name": vector_create.expert_name,
+                    "client_name": vector_create.client_name,
+                    "owner": "client",  # Mark as owned by client
+                    "file_ids": [],  # Start with empty file IDs
+                    "batch_ids": []   # Start with empty batch IDs
+                }
+                
+                print(f"Vector store data to insert: {vector_store_data}")
+                
+                # Insert into vector_stores table
+                vector_result = supabase.table("vector_stores").insert(vector_store_data).execute()
+                print(f"Vector store insert result: {vector_result}")
+            except Exception as e:
+                print(f"Error creating vector_stores entry: {str(e)}")
+                # Continue anyway, the vector store was created successfully
         
         return {
             "expert_name": vector_create.expert_name,
@@ -603,7 +631,7 @@ async def create_expert_client_vector(vector_create: ExpertClientVectorCreate):
         print(f"Error creating expert client vector: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
-# 10. Add files to domain vector
+# 9. Add files to domain vector
 @router.post("/vectors/domain/files", response_model=dict)
 async def add_files_to_domain_vector(files_create: AddFilesToDomainVectorCreate):
     """
@@ -613,23 +641,17 @@ async def add_files_to_domain_vector(files_create: AddFilesToDomainVectorCreate)
         print(f"Adding files to domain vector for domain: {files_create.domain_name}")
         print(f"Document URLs: {files_create.document_urls}")
         
-        # Check if domain exists and get default vector ID
-        domain_result = supabase.table("domains").select("*").eq("domain_name", files_create.domain_name).execute()
-        print(f"Domain query result: {domain_result.data}")
-        
-        if not domain_result.data:
-            raise HTTPException(status_code=404, detail=f"Domain {files_create.domain_name} not found")
-        
-        domain_data = domain_result.data[0]
-        default_vector_id = domain_data.get("default_vector_id")
+        domain_vector = await get_vector_id(files_create.domain_name)
+        default_vector_id = domain_vector.get("vector_id")
+        id = domain_vector.get("id")
         
         if not default_vector_id:
             raise HTTPException(status_code=400, detail=f"Domain {files_create.domain_name} does not have a default vector ID")
-        
+
         print(f"Default vector ID from domain record: {default_vector_id}")
         
         # Add the documents to the vector store
-        result = await add_documents_to_domain_vector_store(client, default_vector_id, files_create.document_urls, files_create.domain_name)
+        result = await add_documents_to_vector_store(client, default_vector_id, files_create.document_urls, files_create.domain_name, None, None)
         print(f"Added documents to vector store: {result}")
         
         # Update vector_stores table with the new file information
@@ -637,17 +659,237 @@ async def add_files_to_domain_vector(files_create: AddFilesToDomainVectorCreate)
         batch_id = result.get("batch_id")
         
         try:
+            update_data = {
+                "file_ids": file_ids,
+                "batch_ids": [batch_id] if batch_id else [],
+                "latest_batch_id": batch_id,
+            }
+            update_result = supabase.table("vector_stores").update(update_data).eq("id", id).execute()
+            print(f"Updated existing vector_stores entry with replacement: {update_result}")
+            
+        except Exception as e:
+            print(f"Error updating vector_stores table: {str(e)}")
+            # Continue anyway, the vector store was updated successfully
+        
+        return {
+            "domain_name": files_create.domain_name,
+            "vector_id": default_vector_id,
+            "file_ids": result.get("file_ids"),
+            "batch_id": result.get("batch_id"),
+            "status": result.get("status"),
+            "message": f"Added {len(files_create.document_urls)} documents to default vector store for domain {files_create.domain_name}"
+        }
+    except Exception as e:
+        print(f"Error adding files to domain vector: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# 10. Add files to domain vector
+@router.post("/vectors/domain/files/update", response_model=dict)
+async def update_files_to_domain_vector(files_update: UpdateFilesToDomainVectorCreate):
+    """
+    Add files to a domain's default vector store
+    """
+    try:
+        print(f"Adding files to domain vector for domain: {files_update.domain_name}")
+        print(f"Document URLs: {files_update.document_urls}")
+        
+        domain_vector = await get_vector_id(files_update.domain_name)
+        default_vector_id = domain_vector.get("vector_id")
+        id = domain_vector.get("id")
+        
+        if not default_vector_id:
+            raise HTTPException(status_code=400, detail=f"Domain {files_create.domain_name} does not have a default vector ID")
+
+        print(f"Default vector ID from domain record: {default_vector_id}")
+        print(f"Default vector ID from domain record: {default_vector_id}")
+        existing_entry = supabase.table("vector_stores").select("*").eq("id", id).execute()
+        if not files_update.append_files:
+            # Get file_ids from vector store
+            files_to_delete = existing_entry.data[0].get("file_ids")
+            if files_to_delete and isinstance(files_to_delete, list) and len(files_to_delete) > 0:
+                # Use the utility function to delete files
+                delete_result = await delete_files_in_vector_store(client, default_vector_id, files_to_delete)
+                if delete_result.get("failed_files") > 0:
+                    raise HTTPException(status_code=400, detail=f"Failed to delete {delete_result.get('failed_files')} files from vector store.")
+                else:
+                    # Delete vector store file_ids
+                    delete_result = supabase.table("vector_stores").update({"file_ids": [], "batch_ids": [], "latest_batch_id": None}).eq("id", id).execute()
+                    print(f"Deleted {delete_result.get('deleted_files')} files from vector store. {delete_result.get('failed_files')} files failed to delete.")
+            else:
+                print("No files to delete in vector store.")
+            
+            
+        # Initialize result variables
+        file_ids = []
+        batch_id = None
+        result = {"file_ids": [], "batch_id": None, "status": "skipped"}
+        
+        # Only add documents to vector store if we have valid document URLs
+        if files_update.document_urls:
+            result = await add_documents_to_vector_store(client, default_vector_id, files_update.document_urls, files_update.domain_name, None, None)
+            print(f"Added documents to vector store: {result}")
+            
+            # Handle result properly whether it's a dictionary or an APIResponse object
+            if hasattr(result, 'get'):
+                # It's a dictionary
+                file_ids = result.get("file_ids", [])
+                batch_id = result.get("batch_id")
+            else:
+                # It's an APIResponse object or something else
+                print(f"Result type: {type(result)}")
+                # Try to access attributes directly
+                try:
+                    file_ids = result.file_ids if hasattr(result, 'file_ids') else []
+                    batch_id = result.batch_id if hasattr(result, 'batch_id') else None
+                except Exception as e:
+                    print(f"Error accessing result attributes: {str(e)}")
+                    # Fallback to empty values
+                    file_ids = []
+                    batch_id = None
+        else:
+            print("Skipping document addition to vector store - no valid documents found")
+        
+        try:    
+            if files_update.append_files:
+                existing_file_ids = existing_entry.data[0].get("file_ids", [])
+                existing_batch_ids = existing_entry.data[0].get("batch_ids", [])
+                
+                # Combine existing and new file_ids without duplicates
+                updated_file_ids = list(set(existing_file_ids + file_ids))
+                    
+                # Add new batch_id if it exists
+                updated_batch_ids = existing_batch_ids
+                if batch_id and batch_id not in updated_batch_ids:
+                    updated_batch_ids.append(batch_id)
+                    
+                update_data = {
+                    "file_ids": updated_file_ids,
+                    "batch_ids": updated_batch_ids,
+                    "latest_batch_id": batch_id or existing_entry.data[0].get("latest_batch_id")
+                    }
+                    
+                print(f"Appending files: {len(file_ids)} new files to {len(existing_file_ids)} existing files")
+            else:
+                update_data = {
+                    "file_ids": file_ids,  # Replace with new file_ids
+                    "batch_ids": [batch_id] if batch_id else [],  # Replace with new batch_id
+                    "latest_batch_id": batch_id
+                    }
+                
+            update_result = supabase.table("vector_stores").update(update_data).eq("id", id).execute()
+            print(f"Updated existing vector_stores entry with replacement: {update_result}")
+        except Exception as e:
+            print(f"Error updating vector_stores table: {str(e)}")
+            # Continue anyway, the vector store was updated successfully
+        
+        return {
+            "domain_name": files_update.domain_name,
+            "vector_id": default_vector_id,
+            "file_ids": result.get("file_ids"),
+            "batch_id": result.get("batch_id"),
+            "status": result.get("status"),
+            "message": f"Added {len(files_update.document_urls)} documents to default vector store for domain {files_update.domain_name}"
+        }
+    except Exception as e:
+        print(f"Error adding files to domain vector: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# 11. Add files to domain vector from config file
+@router.post("/vectors/domain/files/config", response_model=dict)
+async def add_files_to_domain_vector_from_config(config_request: DomainFilesConfigRequest):
+    """
+    Add files to a domain's default vector store from a configuration file
+    
+    The config file should be in JSON format with the following structure:
+    {
+        "files": [
+            {"name": "Document 1", "url": "https://example.com/doc1.pdf"},
+            {"name": "Document 2", "url": "https://example.com/doc2.pdf"}
+        ]
+    }
+    """
+    try:
+        print(f"Adding files to domain vector for domain: {config_request.domain_name} from config file: {config_request.config_file_path}")
+        
+        # Initialize variables
+        document_urls = {}
+        file_exists = os.path.exists(config_request.config_file_path)
+        file_empty = False
+        
+        if file_exists:
+            # Read and parse the config file
+            try:
+                with open(config_request.config_file_path, 'r') as file:
+                    file_content = file.read().strip()
+                    if not file_content:  # Check if file is empty
+                        print(f"Warning: Config file {config_request.config_file_path} is empty")
+                        file_empty = True
+                    else:
+                        config_data = json.loads(file_content)
+                        
+                        if not isinstance(config_data, dict) or 'files' not in config_data or not isinstance(config_data['files'], list):
+                            raise HTTPException(status_code=400, detail="Invalid config file format. Expected JSON with 'files' array")
+                            
+                        # Convert to document_urls format expected by add_documents_to_vector_store
+                        for file_entry in config_data['files']:
+                            if 'name' in file_entry and 'url' in file_entry:
+                                document_urls[file_entry['name']] = file_entry['url']
+                            else:
+                                print(f"Warning: Skipping invalid file entry: {file_entry}")
+                        
+                        if not document_urls:
+                            print(f"Warning: No valid file entries found in config file")
+                            
+                        print(f"Parsed {len(document_urls)} document URLs from config file")
+                
+            except json.JSONDecodeError as e:
+                raise HTTPException(status_code=400, detail=f"Invalid JSON in config file: {str(e)}")
+        else:
+            print(f"Warning: Config file {config_request.config_file_path} does not exist")
+        
+        vector_store = await get_vector_id(config_request.domain_name)
+        default_vector_id = vector_store.get("vector_id")
+        id = vector_store.get("id")
+        
+        if not default_vector_id:
+            raise HTTPException(status_code=400, detail=f"Domain {config_request.domain_name} does not have a default vector ID")
+        
+        print(f"Default vector ID from domain record: {default_vector_id}")
+        
+        # Initialize result variables
+        file_ids = []
+        batch_id = None
+        result = {"file_ids": [], "batch_id": None, "status": "skipped"}
+        
+        # Only add documents to vector store if we have valid document URLs
+        if document_urls:
+            result = await add_documents_to_vector_store(client, default_vector_id, document_urls, config_request.domain_name, None, None)
+            print(f"Added documents to vector store: {result}")
+            file_ids = result.get("file_ids", [])
+            batch_id = result.get("batch_id")
+        else:
+            print("Skipping document addition to vector store - no valid documents found")
+        
+        try:
             # Check if entry exists for this vector_id
-            existing_entry = supabase.table("vector_stores").select("*").eq("vector_id", default_vector_id).execute()
+            existing_entry = supabase.table("vector_stores").select("*").eq("id", id).execute()
             print(f"Existing vector store entry check: {existing_entry.data}")
             
             if existing_entry.data:
-                raise HTTPException(status_code=404, detail=f"Vector store with ID {default_vector_id} already exists")
+                # Replace existing entry with new data
+                update_data = {
+                    "file_ids": file_ids,  # Replace with new file_ids
+                    "batch_ids": [batch_id] if batch_id else [],  # Replace with new batch_id
+                    "latest_batch_id": batch_id
+                }
+                
+                update_result = supabase.table("vector_stores").update(update_data).eq("id", id).execute()
+                print(f"Updated existing vector_stores entry with replacement: {update_result}")
             else:
                 # Create new entry
                 insert_data = {
                     "vector_id": default_vector_id,
-                    "domain_name": files_create.domain_name,
+                    "domain_name": config_request.domain_name,
                     "expert_name": None,  # Domain vector has no expert
                     "client_name": None,   # Domain vector has no client
                     "file_ids": file_ids,
@@ -661,84 +903,263 @@ async def add_files_to_domain_vector(files_create: AddFilesToDomainVectorCreate)
             print(f"Error updating vector_stores table: {str(e)}")
             # Continue anyway, the vector store was updated successfully
         
+        # Prepare appropriate message based on whether documents were added
+        if document_urls:
+            message = f"Added {len(document_urls)} documents from config file to default vector store for domain {config_request.domain_name}"
+        else:
+            if not file_exists:
+                message = f"Config file {config_request.config_file_path} does not exist. Created/updated vector store entry without adding documents."
+            elif file_empty:
+                message = f"Config file {config_request.config_file_path} is empty. Created/updated vector store entry without adding documents."
+            else:
+                message = f"No valid document entries found in config file. Created/updated vector store entry without adding documents."
+        
         return {
-            "domain_name": files_create.domain_name,
+            "domain_name": config_request.domain_name,
             "vector_id": default_vector_id,
-            "vector_name": f"Default_{files_create.domain_name}",  # Following naming convention
+            "vector_name": f"Default_{config_request.domain_name}",  # Following naming convention
             "file_ids": result.get("file_ids"),
             "batch_id": result.get("batch_id"),
             "status": result.get("status"),
-            "message": f"Added {len(files_create.document_urls)} documents to default vector store for domain {files_create.domain_name}"
+            "config_file": config_request.config_file_path,
+            "document_count": len(document_urls),
+            "message": message
         }
     except Exception as e:
-        print(f"Error adding files to domain vector: {str(e)}")
+        print(f"Error adding files to domain vector from config: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
-# 11. Get vector stores
-@router.post("/vectors/stores", response_model=dict)
-async def get_vector_stores(query: VectorStoreQuery):
+# 11.1 Add files to domain vector from config file
+@router.post("/vectors/domain/files/config/update", response_model=dict)
+async def update_files_to_domain_vector_from_config(config_request: UpdateDomainFilesConfigRequest):
     """
-    Get vector stores based on domain, expert, client, and owner information
+    Update files to a domain's default vector store from a configuration file
     
-    Args:
-        query: Query parameters including domain_name, expert_name, client_name, and owner
-        
-    Returns:
-        List of vector stores matching the query parameters
+    The config file should be in JSON format with the following structure:
+    {
+        "files": [
+            {"name": "Document 1", "url": "https://example.com/doc1.pdf"},
+            {"name": "Document 2", "url": "https://example.com/doc2.pdf"}
+        ]
+    }
     """
     try:
-        print(f"Getting vector stores with query: {query}")
+        print(f"Updating files to domain vector for domain: {config_request.domain_name} from config file: {config_request.config_file_path}")
         
-        # Start building the query
-        db_query = supabase.table("vector_stores").select("*")
+        # Initialize variables
+        document_urls = {}
+        file_exists = os.path.exists(config_request.config_file_path)
+        file_empty = False
         
-        # Determine owner based on provided parameters if not explicitly specified
-        computed_owner = None
-        if query.client_name:
-            computed_owner = "client"
-        elif query.expert_name:
-            computed_owner = "expert"
-        elif query.domain_name:
-            computed_owner = "domain"
+        if file_exists:
+            # Read and parse the config file
+            try:
+                with open(config_request.config_file_path, 'r') as file:
+                    file_content = file.read().strip()
+                    if not file_content:  # Check if file is empty
+                        print(f"Warning: Config file {config_request.config_file_path} is empty")
+                        file_empty = True
+                    else:
+                        config_data = json.loads(file_content)
+                        
+                        if not isinstance(config_data, dict) or 'files' not in config_data or not isinstance(config_data['files'], list):
+                            raise HTTPException(status_code=400, detail="Invalid config file format. Expected JSON with 'files' array")
+                            
+                        # Convert to document_urls format expected by add_documents_to_vector_store
+                        for file_entry in config_data['files']:
+                            if 'name' in file_entry and 'url' in file_entry:
+                                document_urls[file_entry['name']] = file_entry['url']
+                            else:
+                                print(f"Warning: Skipping invalid file entry: {file_entry}")
+                        
+                        if not document_urls:
+                            print(f"Warning: No valid file entries found in config file")
+                            
+                        print(f"Parsed {len(document_urls)} document URLs from config file")
+                
+            except json.JSONDecodeError as e:
+                raise HTTPException(status_code=400, detail=f"Invalid JSON in config file: {str(e)}")
         else:
-            # Return the results
-            return {
-                "status": "failure",
-                "message": "specify domain, expert or client"
-            }
-            
-        # Apply filters based on provided parameters
-        if query.domain_name:
-            db_query = db_query.eq("domain_name", query.domain_name)
-            
-        if query.expert_name:
-            db_query = db_query.eq("expert_name", query.expert_name)
-            
-        if query.client_name:
-            db_query = db_query.eq("client_name", query.client_name)
-            
-        if computed_owner:
-            db_query = db_query.eq("owner", computed_owner)
+            print(f"Warning: Config file {config_request.config_file_path} does not exist")
         
-        # Execute the query
-        result = db_query.execute()
-        print(f"Vector stores query result: {result.data}")
-        if len(result.data) > 1:
-            return {
-                "status": "failure",
-                "message": "Multiple vector stores found. Narrow your search"
-            }
-        # Return the results
+        vector_store = await get_vector_id(config_request.domain_name)
+        default_vector_id = vector_store.get("vector_id")
+        id = vector_store.get("id")
+        
+        if not default_vector_id:
+            raise HTTPException(status_code=400, detail=f"Domain {config_request.domain_name} does not have a default vector ID")
+        
+        print(f"Default vector ID from domain record: {default_vector_id}")
+        existing_entry = supabase.table("vector_stores").select("*").eq("id", id).execute()
+        if not config_request.append_files:
+            # Get file_ids from vector store
+            files_to_delete = existing_entry.data[0].get("file_ids")
+            if files_to_delete and isinstance(files_to_delete, list) and len(files_to_delete) > 0:
+                # Use the utility function to delete files
+                delete_result = await delete_files_in_vector_store(client, default_vector_id, files_to_delete)
+                if delete_result.get("failed_files") > 0:
+                    raise HTTPException(status_code=400, detail=f"Failed to delete {delete_result.get('failed_files')} files from vector store.")
+                else:
+                    # Delete vector store file_ids
+                    delete_result = supabase.table("vector_stores").update({"file_ids": [], "batch_ids": [], "latest_batch_id": None}).eq("id", id).execute()
+                    print(f"Deleted {delete_result.get('deleted_files')} files from vector store. {delete_result.get('failed_files')} files failed to delete.")
+            else:
+                print("No files to delete in vector store.")
+            
+            
+        # Initialize result variables
+        file_ids = []
+        batch_id = None
+        result = {"file_ids": [], "batch_id": None, "status": "skipped"}
+        
+        # Only add documents to vector store if we have valid document URLs
+        if document_urls:
+            result = await add_documents_to_vector_store(client, default_vector_id, document_urls, config_request.domain_name, None, None)
+            print(f"Added documents to vector store: {result}")
+            file_ids = result.get("file_ids", [])
+            batch_id = result.get("batch_id")
+        else:
+            print("Skipping document addition to vector store - no valid documents found")
+        
+        try:    
+            if config_request.append_files:
+                existing_file_ids = existing_entry.data[0].get("file_ids", [])
+                existing_batch_ids = existing_entry.data[0].get("batch_ids", [])
+                
+                # Combine existing and new file_ids without duplicates
+                updated_file_ids = list(set(existing_file_ids + file_ids))
+                    
+                # Add new batch_id if it exists
+                updated_batch_ids = existing_batch_ids
+                if batch_id and batch_id not in updated_batch_ids:
+                    updated_batch_ids.append(batch_id)
+                    
+                update_data = {
+                    "file_ids": updated_file_ids,
+                    "batch_ids": updated_batch_ids,
+                    "latest_batch_id": batch_id or existing_entry.data[0].get("latest_batch_id")
+                    }
+                    
+                print(f"Appending files: {len(file_ids)} new files to {len(existing_file_ids)} existing files")
+            else:
+                update_data = {
+                    "file_ids": file_ids,  # Replace with new file_ids
+                    "batch_ids": [batch_id] if batch_id else [],  # Replace with new batch_id
+                    "latest_batch_id": batch_id
+                    }
+                
+            update_result = supabase.table("vector_stores").update(update_data).eq("id", id).execute()
+            print(f"Updated existing vector_stores entry with replacement: {update_result}")
+        except Exception as e:
+            print(f"Error updating vector_stores table: {str(e)}")
+            # Continue anyway, the vector store was updated successfully
+        
+        # Prepare appropriate message based on whether documents were added
+        if document_urls:
+            message = f"Added {len(document_urls)} documents from config file to default vector store for domain {config_request.domain_name}"
+        else:
+            if not file_exists:
+                message = f"Config file {config_request.config_file_path} does not exist. Created/updated vector store entry without adding documents."
+            elif file_empty:
+                message = f"Config file {config_request.config_file_path} is empty. Created/updated vector store entry without adding documents."
+            else:
+                message = f"No valid document entries found in config file. Created/updated vector store entry without adding documents."
+        
         return {
-            "status": "success",
-            "vector_store_id": result.data[0]["vector_id"],
-            "count": len(result.data)
+            "domain_name": config_request.domain_name,
+            "vector_id": default_vector_id,
+            "file_ids": result.get("file_ids"),
+            "batch_id": result.get("batch_id"),
+            "status": result.get("status"),
+            "config_file": config_request.config_file_path,
+            "document_count": len(document_urls),
+            "message": message
         }
     except Exception as e:
-        print(f"Error getting vector stores: {str(e)}")
+        print(f"Error adding files to domain vector from config: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
-# 12. Update vector store
+# 12. Generate persona from QA data
+@router.post("/persona/generate", response_model=dict)
+async def generate_persona_from_qa_data(persona_request: PersonaGenerationRequest):
+    """
+    Generate a persona summary from QA data provided directly in the request
+    
+    The request body should have the following structure:
+    {
+        "qa_pairs": [
+            {"question": "What is your area of expertise?", "answer": "I specialize in pediatric cardiology..."},
+            {"question": "How do you approach difficult cases?", "answer": "I believe in a collaborative approach..."}
+        ]
+    }
+    """
+    try:
+        print(f"Generating persona from {len(persona_request.qa_pairs)} QA pairs")
+        
+        # Validate QA pairs
+        if not persona_request.qa_pairs:
+            raise HTTPException(status_code=400, detail="No QA pairs provided in request")
+        
+        valid_qa_pairs = []
+        for qa in persona_request.qa_pairs:
+            if isinstance(qa, dict) and 'question' in qa and 'answer' in qa:
+                valid_qa_pairs.append(qa)
+            else:
+                print(f"Warning: Skipping invalid QA pair: {qa}")
+        
+        if not valid_qa_pairs:
+            raise HTTPException(status_code=400, detail="No valid QA pairs found in request")
+            
+        print(f"Validated {len(valid_qa_pairs)} QA pairs from request")
+        
+        # Generate persona using OpenAI
+        persona_summary = await generate_persona_from_qa(client, valid_qa_pairs)
+        
+        return {
+            "qa_pairs_count": len(valid_qa_pairs),
+            "persona": persona_summary,
+            "message": "Successfully generated persona from QA pairs"
+        }
+    except Exception as e:
+        print(f"Error generating persona from config: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# 12.1 Update expert persona
+@router.api_route("/experts/persona/update", methods=["POST", "PUT"], response_model=dict)
+async def update_expert_persona(request: UpdateExpertPersonaRequest):
+    """
+    Generate a persona from QA data and update the expert's context with it
+    
+    This endpoint combines the persona generation and context update steps:
+    1. Generate a persona from the provided QA pairs
+    2. Update the expert's context with the generated persona
+    """
+    try:
+        print(f"Updating persona for expert: {request.expert_name} with {len(request.qa_pairs)} QA pairs")
+        
+        # Step 1: Generate persona from QA data
+        persona_request = PersonaGenerationRequest(qa_pairs=request.qa_pairs)
+        persona_result = await generate_persona_from_qa_data(persona_request)
+        persona_summary = persona_result["persona"]
+        print(f"Generated persona: {persona_summary}")
+        
+        # Step 2: Update expert's context with the generated persona
+        expert_update = ExpertUpdate(name=request.expert_name, context=persona_summary)
+        update_result = await update_context(expert_update)
+        
+        return {
+            "expert_name": request.expert_name,
+            "qa_pairs_count": len(request.qa_pairs),
+            "persona": persona_summary,
+            "update_result": update_result,
+            "status": "success",
+            "message": f"Successfully updated persona for expert {request.expert_name}"
+        }
+    except Exception as e:
+        print(f"Error updating expert persona: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# 13. Update vector store
 @router.post("/vectors/update", response_model=dict)
 async def update_vector_store(update_request: UpdateVectorStoreRequest):
     """
@@ -751,25 +1172,33 @@ async def update_vector_store(update_request: UpdateVectorStoreRequest):
         Updated vector store information
     """
     try:
-        print(f"Updating vector store {update_request.vector_id} with {len(update_request.document_urls)} new documents")
-        
+        print(f"Updating vector store {update_request.expert_name} with {len(update_request.document_urls)} new documents")
+        expert_name = None
+        domain_name = None
+        if update_request.expert_name:
+            expert_name = update_request.expert_name
+            expert_domain_result = await get_expert_domain(expert_name)
+        if update_request.domain_name:
+            domain_name = update_request.domain_name
+        else:
+            domain_name = expert_domain_result.get("domain_name") if expert_domain_result else None
+        vector_st = await get_vector_id(domain_name, expert_name)
+        vector_id = vector_st.get("vector_id")
+        id = vector_st.get("id")
         # Query by vector_id directly from the vector_stores table
-        vector_store_result = supabase.table("vector_stores").select("*").eq("vector_id", update_request.vector_id).execute()
+        vector_store_result = supabase.table("vector_stores").select("*").eq("id", id).execute()
         print(f"Vector store query result: {vector_store_result.data}")
         
         if not vector_store_result.data:
-            raise HTTPException(status_code=404, detail=f"Vector store with ID {update_request.vector_id} not found")
+            raise HTTPException(status_code=404, detail=f"Vector store with ID {vector_id} not found")
         
         vector_store = vector_store_result.data[0]
-        domain_name = vector_store["domain_name"]
-        expert_name = vector_store["expert_name"]
         client_name = vector_store["client_name"]
         file_ids = vector_store["file_ids"]
         
-        # Call edit_vector_store function to update the vector store
         result = await edit_vector_store(
             client, 
-            update_request.vector_id, 
+            vector_id, 
             file_ids, 
             update_request.document_urls, 
             domain_name, 
@@ -808,7 +1237,7 @@ async def update_vector_store(update_request: UpdateVectorStoreRequest):
                 "latest_batch_id": batch_id if batch_id else vector_store.get("latest_batch_id"),
                 "updated_at": "now()"
             }
-            update_result = supabase.table("vector_stores").update(update_data).eq("vector_id", update_request.vector_id).execute()
+            update_result = supabase.table("vector_stores").update(update_data).eq("id", id).execute()
             print(f"Updated vector_stores entry: {update_result}")
         except Exception as e:
             print(f"Error updating vector_stores table: {str(e)}")
@@ -816,8 +1245,8 @@ async def update_vector_store(update_request: UpdateVectorStoreRequest):
         
         return {
             "status": "success",
-            "message": f"Added {len(new_file_ids)} documents to vector store {update_request.vector_id}",
-            "vector_id": update_request.vector_id,
+            "message": f"Added {len(new_file_ids)} documents to vector store {vector_id}",
+            "vector_id": vector_id,
             "domain_name": domain_name,
             "expert_name": expert_name,
             "client_name": client_name,
@@ -829,7 +1258,7 @@ async def update_vector_store(update_request: UpdateVectorStoreRequest):
         print(f"Error updating vector store: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
-# 13. Add files to expert vector
+# 14. Add files to expert vector
 @router.post("/vectors/expert/files", response_model=dict)
 async def add_files_to_expert_vector(files_create: AddFilesToExpertVectorCreate):
     """
@@ -840,9 +1269,25 @@ async def add_files_to_expert_vector(files_create: AddFilesToExpertVectorCreate)
         print(f"Use for specific client: {files_create.use_for_specific_client}")
         print(f"Document URLs: {files_create.document_urls}")
         
-        vector_id = None
-        vector_name = None
+        # Check if document_urls is empty
+        if not files_create.document_urls:
+            print("No document URLs provided, returning early")
+            return {
+                "expert_name": files_create.expert_name,
+                "client_name": files_create.client_name if files_create.use_for_specific_client else None,
+                "vector_id": None,
+                "file_ids": [],
+                "batch_id": None,
+                "status": "skipped",
+                "message": "No documents provided to add to vector store"
+            }
         
+        vector_id = None
+        expert_domain_result = await get_expert_domain(files_create.expert_name)
+        domain_name = expert_domain_result.get("domain_name") if expert_domain_result else None
+        client_name = files_create.client_name if files_create.use_for_specific_client else None
+        create_entry_vector_stores_table = False
+
         # Get the appropriate vector ID based on the use_for_specific_client flag
         if files_create.use_for_specific_client:
             # Validate client name is provided when use_for_specific_client is True
@@ -857,49 +1302,66 @@ async def add_files_to_expert_vector(files_create: AddFilesToExpertVectorCreate)
                 )
             )
             vector_id = client_vector_result.get("vector_id")
-            vector_name = client_vector_result.get("vector_name")
+            create_entry_vector_stores_table = True
             print(f"Using client-specific vector ID: {vector_id}")
         else:
-            # Get or create the expert's preferred vector store and get its ID
-            expert_vector_result = await update_expert_domain_vector(
-                ExpertVectorCreate(
-                    expert_name=files_create.expert_name
-                )
-            )
+            # Get the expert's preferred vector store and get its ID
+            expert_domain_vector = await get_vector_id(domain_name)
+            expert_domain_vector_id = expert_domain_vector.get("vector_id")
+            expert_vector_result = await get_vector_id(domain_name, files_create.expert_name)
             vector_id = expert_vector_result.get("vector_id")
-            vector_name = expert_vector_result.get("vector_name")
-            print(f"Using expert's preferred vector ID: {vector_id}")
-        
+            id = expert_vector_result.get("id")
+            print(f"Using expert's vector ID: {vector_id}")
+            # if adding files to expert vector, then it cannot be the domain vector
+            if expert_domain_vector_id == vector_id:
+                # Create a proper ExpertVectorCreate object to pass to the function
+                vector_create = ExpertVectorCreate(
+                    expert_name=files_create.expert_name,
+                    domain_name=domain_name,
+                    use_default_domain_vector=False
+                )
+                vector_result = await create_expert_domain_vector(vector_create)
+                vector_id = vector_result.get("vector_id")
+                create_entry_vector_stores_table = True
         # Add the documents to the vector store
         if not vector_id:
             raise HTTPException(status_code=500, detail="Failed to get or create vector store")
-            
-        # Check if expert exists and get domain
-        expert_result = supabase.table("experts").select("*").eq("name", files_create.expert_name).execute()
-        print(f"Expert query result: {expert_result.data}")
-        
-        if not expert_result.data:
-            raise HTTPException(status_code=404, detail=f"Expert {files_create.expert_name} not found")
-        
-        expert_data = expert_result.data[0]
-        domain_name = expert_data.get("domain")
-        client_name = files_create.client_name if files_create.use_for_specific_client else None
-        
+  
         # Add the documents to the vector store
-        result = await add_documents_to_expert_vector_store(client, vector_id, files_create.document_urls, domain_name, files_create.expert_name, client_name)
+        result = await add_documents_to_vector_store(client, vector_id, files_create.document_urls, domain_name, files_create.expert_name, client_name)
         print(f"Added documents to vector store: {result}")
         
         # Update vector_stores table with the new file information
-        file_ids = result.get("file_ids", [])
-        batch_id = result.get("batch_id")
+        # Handle result properly whether it's a dictionary or an APIResponse object
+        if hasattr(result, 'get'):
+            # It's a dictionary
+            file_ids = result.get("file_ids", [])
+            batch_id = result.get("batch_id")
+        else:
+            # It's an APIResponse object or something else
+            print(f"Result type: {type(result)}")
+            # Try to access attributes directly
+            try:
+                file_ids = result.file_ids if hasattr(result, 'file_ids') else []
+                batch_id = result.batch_id if hasattr(result, 'batch_id') else None
+            except Exception as e:
+                print(f"Error accessing result attributes: {str(e)}")
+                # Fallback to empty values
+                file_ids = []
+                batch_id = None
         
         try:
             # Check if entry exists for this vector_id
-            existing_entry = supabase.table("vector_stores").select("*").eq("vector_id", vector_id).execute()
-            print(f"Existing vector store entry check: {existing_entry.data}")
-            
-            if existing_entry.data:
-                raise HTTPException(status_code=404, detail=f"Vector store with ID {vector_id} already exists")
+            if not create_entry_vector_stores_table:
+                # Replace existing entry with new file_ids and batch_id
+                update_data = {
+                    "file_ids": file_ids,  # Replace with new file_ids instead of appending
+                    "batch_ids": [batch_id] if batch_id else [],  # Replace with new batch_id
+                    "latest_batch_id": batch_id  # Always update latest_batch_id
+                }
+                
+                update_result = supabase.table("vector_stores").update(update_data).eq("id", id).execute()
+                print(f"Updated existing vector_stores entry with replacement: {update_result}")
             else:
                 # Create new entry
                 # Determine owner based on client_name and expert_name
@@ -925,7 +1387,6 @@ async def add_files_to_expert_vector(files_create: AddFilesToExpertVectorCreate)
             "expert_name": files_create.expert_name,
             "client_name": files_create.client_name if files_create.use_for_specific_client else None,
             "vector_id": vector_id,
-            "vector_name": vector_name,
             "file_ids": result.get("file_ids"),
             "batch_id": result.get("batch_id"),
             "status": result.get("status"),
@@ -933,35 +1394,138 @@ async def add_files_to_expert_vector(files_create: AddFilesToExpertVectorCreate)
         }
     except Exception as e:
         print(f"Error adding files to expert vector: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        # Return partial success instead of raising an exception
+        return {
+            "expert_name": files_create.expert_name,
+            "client_name": files_create.client_name if files_create.use_for_specific_client else None,
+            "vector_id": None,
+            "file_ids": [],
+            "batch_id": None,
+            "status": "error",
+            "message": f"Error adding files to expert vector: {str(e)}"
+        }
 
-# 14. Delete vector ID
-@router.delete("/vectors/expert", response_model=dict)
-async def delete_vector_id(delete_request: DeleteVectorIdRequest):
+# 14.1 Update files to expert vector
+@router.put("/vectors/expert/files", response_model=dict)
+async def update_files_to_expert_vector(files_update: UpdateFilesToExpertVectorCreate):
     """
-    Delete an expert's preferred vector ID
+    Update files in an expert vector store by appending new files to existing ones.
+    This endpoint first finds the appropriate vector ID based on expert name, client name, and domain,
+    then adds the new documents and updates the vector_stores table by appending the new file IDs and batch IDs.
     """
     try:
-        # Find expert
-        expert = supabase.table("experts").select("*").eq("name", delete_request.expert_name).execute()
+        print(f"Updating files in expert vector for expert: {files_update.expert_name}")
+        print(f"Use for specific client: {files_update.use_for_specific_client}")
+        print(f"Document URLs: {files_update.document_urls}")
+        print(f"Append files: {files_update.append_files}")
         
-        if not expert.data:
-            raise HTTPException(status_code=404, detail=f"Expert {delete_request.expert_name} not found")
+        # Check if document_urls is empty
+        if not files_update.document_urls:
+            print("No document URLs provided, returning early")
+            return {
+                "expert_name": files_update.expert_name,
+                "client_name": files_update.client_name if files_update.use_for_specific_client else None,
+                "vector_id": None,
+                "file_ids": [],
+                "batch_id": None,
+                "status": "skipped",
+                "message": "No documents provided to update vector store"
+            }
         
-        expert_data = expert.data[0]
+        # Check if expert exists and get domain
+        expert_result = await get_expert_domain(files_update.expert_name)
+        domain_name = expert_result.get("domain_name")
+        if not domain_name:
+            raise HTTPException(status_code=400, detail=f"Expert {files_update.expert_name} does not have an associated domain")
+        print(f"Domain name from expert record: {domain_name}")
         
-        # Check if the vector ID matches the expert's preferred vector ID
-        if expert_data.get("preferred_vector_id") != delete_request.vector_id:
-            raise HTTPException(status_code=400, detail="Vector ID does not match expert's preferred vector ID")
+        client_name = files_update.client_name if files_update.use_for_specific_client else None
+        vector_st = await get_vector_id(domain_name, files_update.expert_name, client_name)
+        vector_id = vector_st.get("vector_id")
+        id = vector_st.get("id")
+
+        if not vector_id:
+            # If no vector store found, create one using the add_files_to_expert_vector endpoint
+            print("No existing vector store found, creating a new one")
+            raise HTTPException(status_code=400, detail=f"No existing vector store found for expert {files_update.expert_name}")
         
-        # Delete the vector index
-        await delete_vector_index(delete_request.vector_id)
+        # Use the found vector ID
+        print(f"Found existing vector ID: {vector_id}")
+        existing_entry = supabase.table("vector_stores").select("*").eq("id", id).execute()
+        if not files_update.append_files:
+            # Get file_ids from vector store
+            files_to_delete = existing_entry.data[0].get("file_ids")
+            if files_to_delete and isinstance(files_to_delete, list) and len(files_to_delete) > 0:
+                # Use the utility function to delete files
+                print(f"Deleting files from vector store: {files_to_delete}")
+                delete_result = await delete_files_in_vector_store(client, vector_id, files_to_delete)
+                if delete_result.get("failed_files") > 0:
+                    raise HTTPException(status_code=400, detail=f"Failed to delete {delete_result.get('failed_files')} files from vector store.")
+                else:
+                    # Delete vector store file_ids
+                    delete_result = supabase.table("vector_stores").update({"file_ids": [], "batch_ids": [], "latest_batch_id": None}).eq("id", id).execute()
+                    print(f"Deleted {delete_result.get('deleted_files')} files from vector store. {delete_result.get('failed_files')} files failed to delete.")
+            else:
+                print("No files to delete in vector store.")
+            
         
-        # Update expert's preferred vector ID to None
-        supabase.table("experts").update({"preferred_vector_id": None}).eq("name", delete_request.expert_name).execute()
+        # Add the documents to the vector store
+        result = await add_documents_to_vector_store(client, vector_id, files_update.document_urls, domain_name, files_update.expert_name, client_name)
+        print(f"Added documents to vector store: {result}")
         
-        return {"message": f"Vector ID {delete_request.vector_id} deleted for expert {delete_request.expert_name}"}
+        # Update vector_stores table with the new file information
+        file_ids = result.get("file_ids", [])
+        batch_id = result.get("batch_id")
+        
+        try:
+            # If append_files is True, combine with existing file_ids and batch_ids
+            if files_update.append_files:
+                existing_file_ids = existing_entry.data[0].get("file_ids", [])
+                existing_batch_ids = existing_entry.data[0].get("batch_ids", [])
+                    
+                # Combine existing and new file_ids without duplicates
+                updated_file_ids = list(set(existing_file_ids + file_ids))
+                    
+                # Add new batch_id if it exists
+                updated_batch_ids = existing_batch_ids
+                if batch_id and batch_id not in updated_batch_ids:
+                    updated_batch_ids.append(batch_id)
+                    
+                update_data = {
+                    "file_ids": updated_file_ids,
+                    "batch_ids": updated_batch_ids,
+                    "latest_batch_id": batch_id or existing_entry.data[0].get("latest_batch_id")
+                }
+                    
+                print(f"Appending files: {len(file_ids)} new files to {len(existing_file_ids)} existing files")
+            else:
+                # Replace existing file_ids and batch_ids
+                update_data = {
+                    "file_ids": file_ids,
+                    "batch_ids": [batch_id] if batch_id else [],
+                    "latest_batch_id": batch_id
+                }
+                print(f"Replacing files: {len(file_ids)} new files")
+                
+            update_result = supabase.table("vector_stores").update(update_data).eq("id", id).execute()
+            print(f"Updated vector_stores entry: {update_result}")
+        except Exception as e:
+            print(f"Error updating vector_stores table: {str(e)}")
+            # Continue anyway, the vector store was updated successfully
+        
+        return {
+            "expert_name": files_update.expert_name,
+            "client_name": client_name,
+            "vector_id": vector_id,
+            "file_ids": file_ids,
+            "all_file_ids": update_data["file_ids"] if "update_data" in locals() else file_ids,
+            "batch_id": batch_id,
+            "status": "success",
+            "append_mode": files_update.append_files,
+            "message": f"{'Appended' if files_update.append_files else 'Replaced'} {len(files_update.document_urls)} documents in vector store for expert {files_update.expert_name}"
+        }
     except Exception as e:
+        print(f"Error updating files in expert vector: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 # 15. Delete vector memory
@@ -975,108 +1539,47 @@ async def delete_vector_memory(delete_request: DeleteVectorRequest):
         print(f"[DEBUG] delete_vector_memory: Request received with domain_name={delete_request.domain_name}, "
               f"expert_name={delete_request.expert_name}, client_name={delete_request.client_name}")
         
-        # Determine the owner based on the provided parameters
-        owner = None
-        if delete_request.domain_name and not delete_request.expert_name and not delete_request.client_name:
-            owner = "domain"
-        elif delete_request.expert_name and not delete_request.client_name:
-            owner = "expert"
-        elif delete_request.expert_name and delete_request.client_name:
-            owner = "client"
-        else:
-            raise HTTPException(status_code=400, detail="Invalid combination of parameters. "
-                                                     "Must provide either domain_name only, "
-                                                     "expert_name only, or both expert_name and client_name.")
-        
-        print(f"[DEBUG] delete_vector_memory: Determined owner as '{owner}'")
-        
-        # Build the query to find the vector store
-        query = supabase.table("vector_stores").select("*")
-        
-        if owner == "domain":
-            query = query.eq("domain_name", delete_request.domain_name).eq("owner", "domain")
-        elif owner == "expert":
-            query = query.eq("expert_name", delete_request.expert_name).eq("owner", "expert")
-        elif owner == "client":
-            query = query.eq("expert_name", delete_request.expert_name)\
-                        .eq("client_name", delete_request.client_name)\
-                        .eq("owner", "client")
-        
-        # Execute the query
-        result = query.execute()
-        print(f"[DEBUG] delete_vector_memory: Query result: {result.data}")
-        
-        if not result.data:
-            raise HTTPException(status_code=404, detail=f"No vector store found for the given parameters")
-        
-        vector_store = result.data[0]
-        vector_id = vector_store.get("vector_id")
-        
-        if not vector_id:
-            raise HTTPException(status_code=404, detail="Vector ID not found in the record")
-        
-        # Perform additional checks based on owner
-        if owner == "domain":
-            # Check if there are experts associated with this domain
-            experts_check = supabase.table("experts").select("name")\
-                                  .eq("domain", delete_request.domain_name).execute()
+        vector_id = delete_request.vector_id if delete_request.vector_id else None
+        vector_id_to_delete = delete_request.delete_id if delete_request.delete_id else None
+        if not vector_id_to_delete:
+            # Build the query to find the vector store
+            query = supabase.table("vector_stores").select("*")
             
-            if experts_check.data and len(experts_check.data) > 0:
-                raise HTTPException(
-                    status_code=400, 
-                    detail=f"Cannot delete domain memory for '{delete_request.domain_name}' "
-                           f"as there are {len(experts_check.data)} experts associated with it. "
-                           f"Remove the experts first."
-                )
-        
-        elif owner == "expert":
-            # Check if there are clients associated with this expert
-            clients_check = supabase.table("vector_stores").select("client_name")\
-                                  .eq("expert_name", delete_request.expert_name)\
-                                  .neq("client_name", None).execute()
+            if delete_request.domain_name:
+                query = query.eq("domain_name", delete_request.domain_name)
             
-            if clients_check.data and len(clients_check.data) > 0:
-                raise HTTPException(
-                    status_code=400, 
-                    detail=f"Cannot delete expert memory for '{delete_request.expert_name}' "
-                           f"as there are {len(clients_check.data)} clients associated with it. "
-                           f"Remove the client memories first."
-                )
+            if delete_request.expert_name:
+                query = query.eq("expert_name", delete_request.expert_name)
+            else:
+                query = query.is_("expert_name", "null")
+
+            if delete_request.client_name:
+                if not delete_request.expert_name:
+                    raise HTTPException(status_code=400, 
+                                      detail="Cannot specify client name without expert name")
+                query = query.eq("client_name", delete_request.client_name)
+            else:
+                query = query.is_("client_name", "null")
+            
+            if vector_id:
+                query = query.eq("vector_id", vector_id)
+                    
+            result = query.execute()
+            if not result.data:
+                raise HTTPException(status_code=404, detail="Vector store not found")
+            vector_id_to_delete = result.data[0].get("id")
+            vector_id = result.data[0].get("vector_id") if not vector_id else vector_id
         
         # Delete the vector index
-        print(f"[DEBUG] delete_vector_memory: Deleting vector store with ID: {vector_id}")
         await delete_vector_index(vector_id)
         
-        # Update the appropriate tables based on owner
-        if owner == "domain":
-            # Update domains table to remove vector_id
-            supabase.table("domains").update({"default_vector_id": None})\
-                    .eq("domain_name", delete_request.domain_name).execute()
-            print(f"[DEBUG] delete_vector_memory: Updated domains table for '{delete_request.domain_name}'")
-            
-        elif owner == "expert":
-            # Update experts table to remove preferred_vector_id
-            supabase.table("experts").update({"preferred_vector_id": None})\
-                    .eq("name", delete_request.expert_name).execute()
-            print(f"[DEBUG] delete_vector_memory: Updated experts table for '{delete_request.expert_name}'")
+        # Delete the vector store record
+        supabase.table("vector_stores").delete().eq("id", vector_id_to_delete).execute()
         
-        # Delete the entry from vector_stores table
-        supabase.table("vector_stores").delete().eq("vector_id", vector_id).execute()
-        print(f"[DEBUG] delete_vector_memory: Deleted entry from vector_stores table")
-        
-        return {
-            "message": f"Vector memory deleted successfully",
-            "vector_id": vector_id,
-            "owner": owner,
-            "domain_name": delete_request.domain_name if owner == "domain" else vector_store.get("domain_name"),
-            "expert_name": delete_request.expert_name if owner in ["expert", "client"] else None,
-            "client_name": delete_request.client_name if owner == "client" else None
-        }
-    except HTTPException as e:
-        # Re-raise HTTP exceptions as-is
-        raise
+        return {"message": f"Vector memory deleted for domain: {delete_request.domain_name}, "
+                           f"expert: {delete_request.expert_name}, client: {delete_request.client_name}"}
+
     except Exception as e:
-        print(f"[ERROR] delete_vector_memory: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 # 16. Get documents by domain, expert, and client
@@ -1105,37 +1608,28 @@ async def get_documents(
             domain_value = domain.value
         else:
             domain_value = domain
-        
+        if not domain_value and not created_by and not client_name:
+            raise HTTPException(status_code=400, detail="At least one filter must be provided")
+            
         # Apply filters based on the specified priority rules
-        if client_name:
-            # Case 1: Filter by client_name (and domain/expert if provided)
-            print(f"Filtering documents by client_name: {client_name}")
-            query = query.eq("client_name", client_name)
-            
-            if domain_value:
-                query = query.eq("domain", domain_value)
-                
-            if created_by:
-                query = query.eq("created_by", created_by)
-                
-        elif created_by:
-            # Case 2: Filter by created_by with null client_name
-            print(f"Filtering documents by created_by: {created_by} with null client_name")
-            query = query.eq("created_by", created_by).is_("client_name", "null")
-            
-            if domain_value:
-                query = query.eq("domain", domain_value)
-                
-        elif domain_value:
-            # Case 3: Filter by domain with 'default' created_by and null client_name
-            print(f"Filtering documents by domain: {domain_value} with default created_by and null client_name")
-            query = query.eq("domain", domain_value).eq("created_by", "default").is_("client_name", "null")
-            
+        if domain_value:
+            query = query.eq("domain", domain_value)
         else:
-            # If no filters provided, get all documents
-            print("No filters provided. Not fetching any documents")
-            # return null documents
-            return []
+            query = query.is_("domain", "null")
+        
+        if created_by:
+            query = query.eq("created_by", created_by)
+        else:
+            query = query.is_("created_by", "null")
+        
+        # Add client filter based on whether it's provided
+        if client_name:
+            if not created_by:
+                raise HTTPException(status_code=400, 
+                                  detail="Cannot specify client_name without created_by")
+            query = query.eq("client_name", client_name)
+        else:
+            query = query.is_("client_name", "null")
         
         # Execute the query
         result = query.execute()
@@ -1152,40 +1646,38 @@ async def query_expert(query_request: QueryRequest):
     Query an expert using their vector index based on the specified memory type.
     Memory types:
     - llm: Use LLM memory (no vector search)
-    - domain: Use domain memory (domain's default_vector_id)
-    - expert: Use expert memory (expert's preferred_vector_id)
-    - client: Use client memory (client-specific vector store)
+    - domain: Use domain memory 
+    - expert: Use expert memory 
+    - client: Use client memory 
     """
     try:
         print(f"[DEBUG] query_expert: Received query for expert: {query_request.expert_name}")
         print(f"[DEBUG] query_expert: Query text: {query_request.query}")
         print(f"[DEBUG] query_expert: Memory type: {query_request.memory_type}")
-        if query_request.client_name:
-            print(f"[DEBUG] query_expert: Client name: {query_request.client_name}")
-        
         # Get expert data
         try:
-            expert = supabase.table("experts").select("*").eq("name", query_request.expert_name).execute()
-            print(f"[DEBUG] query_expert: Expert data fetch result: {expert}")
+            expert_domain_result = await get_expert_domain(query_request.expert_name)
+            domain_name = expert_domain_result.get("domain_name") if expert_domain_result else None
+            if query_request.client_name:
+                print(f"[DEBUG] query_expert: Client name: {query_request.client_name}")
+                vector_st = await get_vector_id(domain_name, query_request.expert_name, query_request.client_name)
+            else:
+                vector_st = await get_vector_id(domain_name, query_request.expert_name)
+            vector_id = vector_st.get("vector_id")
+            id = vector_st.get("id")
+            print(f"[DEBUG] query_expert: Vector store fetch result: {vector_st}")
         except Exception as e:
             print(f"[ERROR] query_expert: Failed to fetch expert data: {str(e)}")
             raise
         
-        if not expert.data:
-            print(f"[ERROR] query_expert: Expert {query_request.expert_name} not found")
-            raise HTTPException(status_code=404, detail=f"Expert {query_request.expert_name} not found")
-        
-        expert_data = expert.data[0]
-        print(f"[DEBUG] query_expert: Expert data: {expert_data}")
-        
         # Determine which vector ID to use based on memory type
         vector_store_ids = None
         
-        if query_request.memory_type == "llm":
+        if query_request.memory_type != "llm":
             # Use LLM memory (no vector search)
             print(f"[DEBUG] query_expert: Using LLM memory (no vector search)")
-            vector_store_ids = None
-            
+            vector_store_ids = vector_id
+        '''    
         elif query_request.memory_type == "domain":
             # Use domain memory
             domain_name = expert_data.get("domain")
@@ -1207,7 +1699,6 @@ async def query_expert(query_request: QueryRequest):
                 
             print(f"[DEBUG] query_expert: Using domain memory with vector ID: {vector_id}")
             vector_store_ids = [vector_id]
-            
         elif query_request.memory_type == "expert":
             # Use expert memory
             vector_id = expert_data.get("preferred_vector_id")
@@ -1217,7 +1708,6 @@ async def query_expert(query_request: QueryRequest):
                 
             print(f"[DEBUG] query_expert: Using expert memory with vector ID: {vector_id}")
             vector_store_ids = [vector_id]
-            
         elif query_request.memory_type == "client":
             # Use client memory
             if not query_request.client_name:
@@ -1252,11 +1742,12 @@ async def query_expert(query_request: QueryRequest):
         else:
             print(f"[ERROR] query_expert: Invalid memory type: {query_request.memory_type}")
             raise HTTPException(status_code=400, detail=f"Invalid memory type: {query_request.memory_type}")
-        
+        '''
         # Query the vector index or LLM
         try:
             print(f"[DEBUG] query_expert: Querying with vector_store_ids: {vector_store_ids}")
-            response = await query_vector_index(query_request.query, vector_store_ids, expert_data.get("context", ""))
+            context = supabase.table("experts").select("context").eq("name", query_request.expert_name).execute().data[0].get("context", "")
+            response = await query_vector_index(query_request.query, vector_store_ids, context)
             print(f"[DEBUG] query_expert: Query response type: {type(response)}")
             
             # Ensure response is properly formatted
@@ -1290,3 +1781,257 @@ async def query_expert(query_request: QueryRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+# 18. Initialize expert memory
+@router.post("/memory/expert/initialize", response_model=dict)
+async def initialize_expert_memory(request: InitializeExpertMemoryRequest):
+    """
+    Initialize an expert's memory by:
+    1. Creating domain if it doesn't exist
+    2. Adding files to domain vector from config file
+    3. Generating persona from QA data
+    4. Creating expert with generated persona
+    5. Adding files to expert vector
+    """
+    try:
+        print(f"Initializing memory for expert: {request.expert_name} in domain: {request.domain_name}")
+        results = {}
+        
+        # Step 1: Create domain or get existing domain
+        print("Step 1: Creating or getting domain")
+        domain_request = DomainCreate(domain_name=request.domain_name)
+        domain_result = await create_domain(domain_request)
+        results["domain"] = domain_result
+        print(f"Domain result: {domain_result}")
+        
+        # Step 2: Add files to domain vector from config file
+        print("Step 2: Adding files to domain vector from config file")
+        
+        # Look for config file in both current directory and project root directory
+        config_file_name = f"{request.domain_name}_config.json"
+        config_file_path = config_file_name
+        root_config_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), config_file_name)
+        
+        print(f"Looking for config file at: {config_file_path} or {root_config_path}")
+        
+        # Check if config file exists in either location
+        if os.path.exists(config_file_path):
+            print(f"Found config file in current directory: {config_file_path}")
+        elif os.path.exists(root_config_path):
+            config_file_path = root_config_path
+            print(f"Found config file in project root: {config_file_path}")
+        
+        if os.path.exists(config_file_path):
+            config_request = DomainFilesConfigRequest(domain_name=request.domain_name, config_file_path=config_file_path)
+            domain_files_result = await add_files_to_domain_vector_from_config(config_request)
+            results["domain_files"] = domain_files_result
+            print(f"Domain files result: {domain_files_result}")
+        else:
+            print(f"Warning: Config file {config_file_path} not found, skipping domain files addition")
+            results["domain_files"] = {"status": "skipped", "message": f"Config file {config_file_path} not found"}
+        
+        # Step 3: Generate persona from QA data
+        print("Step 3: Generating persona from QA data")
+        persona_request = PersonaGenerationRequest(qa_pairs=request.qa_pairs)
+        persona_result = await generate_persona_from_qa_data(persona_request)
+        results["persona"] = persona_result
+        print(f"Persona result: {persona_result}")
+        
+        # Step 4: Create expert with generated persona
+        print("Step 4: Creating expert with generated persona")
+        expert_request = ExpertCreate(
+            name=request.expert_name,
+            domain=request.domain_name,
+            context=persona_result["persona"],  # Use the generated persona as context
+            use_default_domain_knowledge=False
+        )
+        expert_result = await create_expert(expert_request)
+        results["expert"] = expert_result
+        print(f"Expert result: {expert_result}")
+        
+        # Step 5: Add files to expert vector
+        print("Step 5: Adding files to expert vector")
+        # Convert document_urls dict to the format expected by AddFilesToExpertVectorCreate
+        expert_files_request = AddFilesToExpertVectorCreate(
+            expert_name=request.expert_name,
+            document_urls=request.document_urls,
+            use_for_specific_client=False,
+            client_name=None
+        )
+        expert_files_result = await add_files_to_expert_vector(expert_files_request)
+        results["expert_files"] = expert_files_result
+        print(f"Expert files result: {expert_files_result}")
+        
+        return {
+            "expert_name": request.expert_name,
+            "domain_name": request.domain_name,
+            "status": "success",
+            "message": f"Successfully initialized memory for expert {request.expert_name} in domain {request.domain_name}",
+            "results": results
+        }
+    except Exception as e:
+        print(f"Error initializing expert memory: {str(e)}")
+        # Return partial success with details about what succeeded and what failed
+        return {
+            "expert_name": request.expert_name,
+            "domain_name": request.domain_name,
+            "status": "partial_success",
+            "message": f"Partially initialized memory for expert {request.expert_name}. Some steps may have failed: {str(e)}",
+            "results": results
+        }
+
+# OpenAI Assistant API endpoints
+@router.post("/create_assistant", response_model=CreateAssistantResponse)
+async def create_assistant_endpoint(request: CreateAssistantRequest):
+    """
+    Create an OpenAI Assistant for a specific expert and memory type
+    """
+    try:
+        assistant = await get_or_create_assistant(
+            expert_name=request.expert_name,
+            memory_type=request.memory_type,
+            client_name=request.client_name,
+            model=request.model
+        )
+        
+        return CreateAssistantResponse(
+            assistant_id=assistant.id,
+            expert_name=request.expert_name,
+            memory_type=request.memory_type,
+            client_name=request.client_name
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/create_thread", response_model=CreateThreadResponse)
+async def create_thread_endpoint(request: CreateThreadRequest):
+    """
+    Create a new thread for conversation
+    """
+    try:
+        thread = await create_thread()
+        
+        return CreateThreadResponse(
+            thread_id=thread.id,
+            expert_name=request.expert_name,
+            memory_type=request.memory_type,
+            client_name=request.client_name
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/add_message", response_model=AddMessageResponse)
+async def add_message_endpoint(request: AddMessageRequest):
+    """
+    Add a message to a thread
+    """
+    try:
+        message = await add_message_to_thread(
+            thread_id=request.thread_id,
+            content=request.content,
+            role=request.role
+        )
+        
+        return AddMessageResponse(
+            message_id=message.id,
+            thread_id=request.thread_id,
+            content=request.content,
+            role=request.role
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/run_thread", response_model=RunThreadResponse)
+async def run_thread_endpoint(request: RunThreadRequest):
+    """
+    Run a thread with an assistant
+    """
+    try:
+        run = await run_thread(
+            thread_id=request.thread_id,
+            assistant_id=request.assistant_id
+        )
+        
+        return RunThreadResponse(
+            run_id=run.id,
+            thread_id=request.thread_id,
+            assistant_id=request.assistant_id,
+            status=run.status
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/get_run_status", response_model=GetRunStatusResponse)
+async def get_run_status_endpoint(request: GetRunStatusRequest):
+    """
+    Get the status of a run
+    """
+    try:
+        run = await get_run_status(
+            thread_id=request.thread_id,
+            run_id=request.run_id
+        )
+        
+        response = None
+        if run.status == "completed":
+            response = await get_assistant_response(request.thread_id, request.run_id)
+        
+        return GetRunStatusResponse(
+            run_id=run.id,
+            thread_id=request.thread_id,
+            status=run.status,
+            response=response
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/get_thread_messages", response_model=GetThreadMessagesResponse)
+async def get_thread_messages_endpoint(request: GetThreadMessagesRequest):
+    """
+    Get messages from a thread
+    """
+    try:
+        messages_result = await get_thread_messages(
+            thread_id=request.thread_id,
+            limit=request.limit
+        )
+        
+        # Convert OpenAI message objects to our model format
+        messages = []
+        for msg in messages_result.data:
+            content_items = []
+            for content in msg.content:
+                if content.type == "text":
+                    content_items.append(MessageContent(
+                        type=content.type,
+                        text=content.text.value
+                    ))
+            
+            messages.append(ThreadMessage(
+                id=msg.id,
+                role=msg.role,
+                content=content_items
+            ))
+        
+        return GetThreadMessagesResponse(messages=messages)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/query_expert_with_assistant")
+async def query_expert_with_assistant_endpoint(request: QueryRequest):
+    """
+    Query an expert using the OpenAI Assistant API
+    """
+    try:
+        thread_id = request.thread_id if hasattr(request, 'thread_id') else None
+        
+        result = await query_expert_with_assistant(
+            expert_name=request.expert_name,
+            query=request.query,
+            memory_type=request.memory_type,
+            client_name=request.client_name,
+            thread_id=thread_id
+        )
+        
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

@@ -1,11 +1,9 @@
 import os
 import httpx
-import tempfile
 import urllib.parse
-from typing import List, Optional
+from typing import List
 from openai import OpenAI
 from io import BytesIO
-import requests
 from llama_cloud_services import LlamaParse
 from config import OPENAI_API_KEY, LLAMAPARSE_API_KEY
 from database import supabase
@@ -67,10 +65,17 @@ async def create_file_for_vector_store(client, document_url: str, document_name:
             file_extension = os.path.splitext(url_path)[1]
             print(f"Detected file extension from URL: {file_extension}")
             
-            if not file_extension:
-                # If no extension found, default to .pdf
+            # Special handling for arxiv URLs
+            
+            if not file_extension or file_extension not in [
+                '.c', '.cpp', '.css', '.csv', '.doc', '.docx', '.gif', '.go', '.html', 
+                '.java', '.jpeg', '.jpg', '.js', '.json', '.md', '.pdf', '.php', '.pkl', 
+                '.png', '.pptx', '.py', '.rb', '.tar', '.tex', '.ts', '.txt', '.webp', 
+                '.xlsx', '.xml', '.zip'
+            ]:
+                # If no extension found or invalid extension, default to PDF
                 file_extension = '.pdf'
-                print(f"No extension detected, defaulting to: {file_extension}")
+                print(f"No valid extension detected, defaulting to: {file_extension}")
             
             async with httpx.AsyncClient(timeout=60.0) as httpclient:
                 response = await httpclient.get(document_url)
@@ -83,111 +88,79 @@ async def create_file_for_vector_store(client, document_url: str, document_name:
                     file=file_tuple,
                     purpose="assistants"
                 )
-                # Save to a temporary file with the correct extension
-                #temp_file_handle, temp_path = tempfile.mkstemp(suffix=file_extension)
-                #with os.fdopen(temp_file_handle, 'wb') as temp_file:
-                    #temp_file.write(response.content)
-                #print(f"Saved to temporary file: {temp_path}")
+
         else:
             # It's a local file path
-            #temp_path = document_url
-            # Handle local file path
             with open(document_url, "rb") as file_content:
                 result = client.files.create(
                     file=file_content,
                     purpose="assistants"
                 )
-        
-        # Parse the document using LlamaParse
-        # Use the async version of the parser
-        #print(f"Parsing document with LlamaParse: {temp_path}")
-        #result = await llama_parser.aparse(file_content)
-        #from urllib.request import Request, urlopen
-        #from io import BytesIO
-        #path = "https://my-bucket.amazonaws.com/path-to-file.pdf"
-        #remoteFile = urlopen(Request(path)).read()
-        #memoryFile = BytesIO(remoteFile)
-        #documents = parser.load_data(memoryFile, extra_info={"file_name": "sample-file.pdf"}) # file name is required to be passed
-        #print(documents)
-        #print(f"Parsing successful, result type: {type(result)}")
-        #print(f"Result attributes: {dir(result)}")
-        
-        # Extract the content from the result
-        # The JobResult object might have different attributes depending on the version
-        # Common attributes are: text, content, markdown, or document
-        """
-        if hasattr(result, 'text'):
-            content = result.text
-            print(f"Found 'text' attribute, length: {len(content)}")
-        elif hasattr(result, 'content'):
-            content = result.content
-            print(f"Found 'content' attribute, length: {len(content)}")
-        elif hasattr(result, 'document'):
-            content = result.document
-            print(f"Found 'document' attribute, length: {len(content)}")
-        elif hasattr(result, 'markdown'):
-            content = result.markdown
-            print(f"Found 'markdown' attribute, length: {len(content)}")
-        else:
-            # If none of the expected attributes are found, convert the entire result to string
-            content = str(result)
-            print(f"No standard content attribute found, using string representation, length: {len(content)}")
-        
-        # Clean up temporary file if we created one
-        if temp_path and document_url.startswith(('http://', 'https://')):
-            print(f"Cleaning up temporary file: {temp_path}")
-            os.unlink(temp_path)
-        """
+
         # Store document information in the documents table if domain is provided
         if domain_name:
-            try:
-                # Get count of existing documents for this domain to generate name
-                # Use provided document name or generate one if not provided
-                if document_name:
-                    doc_name = document_name
-                else:
-                    doc_count_result = supabase.table("documents").select("id").eq("domain", domain_name).execute()
-                    doc_count = len(doc_count_result.data) + 1
-                    doc_name = f"Document {doc_count}"
-                if expert_name:
-                    created_by = expert_name
-                else:
-                    created_by = "default"
-                if client_name:
-                    client_name = client_name
-                else:
-                    client_name = None
-                # Insert document record
-                doc_insert = supabase.table("documents").insert({
-                    "name": doc_name,
-                    "document_link": document_url,
-                    "domain": domain_name,
-                    "created_by": created_by,
-                    "client_name": client_name,
-                    "openai_file_id": result.id  # Store OpenAI file ID
-                }).execute()
+            # Get count of existing documents for this domain to generate name
+            # Use provided document name or generate one if not provided
+            if document_name:
+                doc_name = document_name
+            else:
+                doc_count_result = supabase.table("documents").select("id").eq("domain", domain_name).execute()
+                doc_count = len(doc_count_result.data) + 1
+                doc_name = f"Document {doc_count}"
                 
-                print(f"Stored document in database: {doc_name}, OpenAI file ID: {result.id}")
-            except Exception as e:
-                print(f"Error storing document in database: {str(e)}")
-                # Continue anyway as we still want to return the file ID
-        
+            # Initialize variables with default values
+            created_by = None
+            
+            if expert_name:
+                created_by = expert_name
+                
+            # No need to reassign client_name to itself
+            # if client_name:
+            #    client_name = client_name
+                
+            # Check if document with same name already exists
+            existing_doc = supabase.table("documents").select("*").eq("name", doc_name).execute()
+            
+            if existing_doc.data and len(existing_doc.data) > 0:
+                # Document with this name already exists
+                print(f"Document with name '{doc_name}' already exists. Checking URL...")
+                
+                # If it's the same URL, just return the existing OpenAI file ID
+                if existing_doc.data[0].get("document_link") == document_url:
+                    print(f"Same URL found. Reusing existing OpenAI file ID: {existing_doc.data[0].get('openai_file_id')}")
+                    return existing_doc.data[0].get("openai_file_id")
+                
+                # If it's a different URL, make the name unique by adding a timestamp
+                import time
+                timestamp = int(time.time())
+                doc_name = f"{doc_name}_{timestamp}"
+                print(f"Different URL. Using unique name: {doc_name}")
+            
+            # Insert document record
+            doc_record = {
+                "name": doc_name,
+                "document_link": document_url,
+                "domain": domain_name,
+            }
+            
+            # Only add these fields if they have values
+            if created_by:
+                doc_record["created_by"] = created_by
+            if client_name:
+                doc_record["client_name"] = client_name
+                
+            # Add the OpenAI file ID to the record
+            doc_record["openai_file_id"] = result.id
+            
+            # Insert the complete record
+            supabase.table("documents").insert(doc_record).execute()
+            
+            print(f"Stored document in database: {doc_name}, OpenAI file ID: {result.id}")
         # Return the extracted result id
         return result.id
     except Exception as e:
         print(f"Error in create_file_for_vector_store: {str(e)}")
         print(f"Error type: {type(e)}")
-        import traceback
-        print(f"Traceback: {traceback.format_exc()}")
-        
-        # Clean up temporary file if it exists
-        if temp_path and os.path.exists(temp_path):
-            try:
-                os.unlink(temp_path)
-                print(f"Cleaned up temporary file after error: {temp_path}")
-            except Exception as cleanup_error:
-                print(f"Error cleaning up temporary file: {str(cleanup_error)}")
-        
         raise Exception(f"Error creating file: {str(e)}")
 
 async def create_files_for_vector_store(client, document_urls: dict, domain_name: str = None, expert_name: str = None, client_name: str = None) -> list:
@@ -204,100 +177,28 @@ async def create_files_for_vector_store(client, document_urls: dict, domain_name
     Returns:
         List of file IDs created in OpenAI
     """
-    try:
-        print(f"Processing batch of {len(document_urls)} documents")
-        file_ids = []
-        
-        # Process each document URL and collect file IDs
-        for doc_name, document_url in document_urls.items():
+    print(f"Processing batch of {len(document_urls)} documents")
+    file_ids = []
+    failed_docs = []
+    
+    # Process each document URL and collect file IDs
+    for doc_name, document_url in document_urls.items():
+        try:
             file_id = await create_file_for_vector_store(client, document_url, document_name=doc_name, domain_name=domain_name, expert_name=expert_name, client_name=client_name)
             file_ids.append(file_id)
             print(f"Created file with ID: {file_id} for document: {doc_name}")
-        
-        return file_ids
-    except Exception as e:
-        print(f"Error in create_files_for_vector_store: {str(e)}")
-        raise Exception(f"Error creating files: {str(e)}")
-
-async def add_to_vector_store(client, vector_store_id: str, document_id: str):
-    """
-    Add a single document to a vector store
-    """
-    try:
-        result = client.vector_stores.files.create(
-            vector_store_id=vector_store_id,
-            file_id=document_id
-        )
-        return result
-    except Exception as e:
-        print(f"Error adding document to vector store: {str(e)}")
-        raise Exception(f"Error adding document to vector store: {str(e)}")
-
-async def add_document_to_vector_store(client, vector_store_id: str, document_url: str, document_name: str = None, domain_name: str = None):
-    """
-    Process a single document and add it to a vector store
+        except Exception as e:
+            print(f"Failed to process document '{doc_name}' with URL '{document_url}': {str(e)}")
+            failed_docs.append(doc_name)
+            continue  # Skip this document and continue with the next one
     
-    Args:
-        client: OpenAI client
-        vector_store_id: ID of the vector store
-        document_url: URL or local path to the document
-        document_name: Optional name for the document
-        domain_name: Optional domain name to associate the document with
-        
-    Returns:
-        Dictionary with file_id, vector_store_id, and status
-    """
-    try:
-        # First create a file from the document
-        file_id = await create_file_for_vector_store(client, document_url, document_name=document_name, domain_name=domain_name, expert_name=None, client_name=None)
-        print(f"Created file with ID: {file_id} for document: {document_name or document_url}")
-        
-        # Then add the file to the vector store
-        result = await add_to_vector_store(client, vector_store_id, file_id)
-        print(f"Added file to vector store: {result}")
-        
-        return {
-            "file_id": file_id,
-            "vector_store_id": vector_store_id,
-            "status": "success"
-        }
-    except Exception as e:
-        print(f"Error adding document to vector store: {str(e)}")
-        raise Exception(f"Error adding document to vector store: {str(e)}")
-
-async def add_documents_to_domain_vector_store(client, vector_store_id: str, document_urls: dict, domain_name: str = None):
-    """
-    Process multiple documents and add them to a vector store using batch API
+    # Report on any failed documents
+    if failed_docs:
+        print(f"Warning: {len(failed_docs)} documents failed to process: {', '.join(failed_docs)}")
     
-    Args:
-        client: OpenAI client
-        vector_store_id: ID of the vector store
-        document_urls: Dictionary of document names to URLs or local paths
-        domain_name: Optional domain name to associate the documents with
-        
-    Returns:
-        Dictionary with file_ids, batch_id, vector_store_id, and status
-    """
-    try:
-        # First create files from the documents
-        file_ids = await create_files_for_vector_store(client, document_urls, domain_name, None, None)
-        print(f"Created {len(file_ids)} files with IDs: {file_ids}")
-        
-        # Then add the files to the vector store as a batch
-        batch_result = await add_batch_to_vector_store(client, vector_store_id, file_ids)
-        print(f"Added files to vector store as batch: {batch_result.id}")
-        
-        return {
-            "file_ids": file_ids,
-            "batch_id": batch_result.id,
-            "vector_store_id": vector_store_id,
-            "status": batch_result.status
-        }
-    except Exception as e:
-        print(f"Error adding documents to vector store: {str(e)}")
-        raise Exception(f"Error adding documents to vector store: {str(e)}")
+    return file_ids
 
-async def add_documents_to_expert_vector_store(client, vector_store_id: str, document_urls: dict, domain_name: str, expert_name: str, client_name: str = None):
+async def add_documents_to_vector_store(client, vector_store_id: str, document_urls: dict, domain_name: str, expert_name: str, client_name: str = None):
     """
     Process multiple documents and add them to a vector store using batch API
     
@@ -311,24 +212,43 @@ async def add_documents_to_expert_vector_store(client, vector_store_id: str, doc
     Returns:
         Dictionary with file_ids, batch_id, vector_store_id, and status
     """
+    # First create files from the documents
+    file_ids = await create_files_for_vector_store(client, document_urls, domain_name, expert_name, client_name)
+    print(f"Created {len(file_ids)} files with IDs: {file_ids}")
+    
+    # If no files were successfully created, return early with a warning
+    if not file_ids:
+        print("Warning: No files were successfully created. Cannot add to vector store.")
+        return {
+            "file_ids": [],
+            "batch_id": None,
+            "vector_store_id": vector_store_id,
+            "status": "failed",
+            "message": "No files were successfully created"
+        }
+    
     try:
-        # First create files from the documents
-        file_ids = await create_files_for_vector_store(client, document_urls, domain_name, expert_name, client_name)
-        print(f"Created {len(file_ids)} files with IDs: {file_ids}")
-        
         # Then add the files to the vector store as a batch
         batch_result = await add_batch_to_vector_store(client, vector_store_id, file_ids)
-        print(f"Added files to vector store as batch: {batch_result.id}")
+        print(f"Added files to vector store as batch: {batch_result['id']}")
         
         return {
             "file_ids": file_ids,
-            "batch_id": batch_result.id,
+            "batch_id": batch_result['id'],
             "vector_store_id": vector_store_id,
-            "status": batch_result.status
+            "status": batch_result['status'],
+            "message": f"Successfully added {len(file_ids)} files to vector store"
         }
     except Exception as e:
         print(f"Error adding documents to vector store: {str(e)}")
-        raise Exception(f"Error adding documents to vector store: {str(e)}")
+        # Return partial success if we at least created some files
+        return {
+            "file_ids": file_ids,
+            "batch_id": None,
+            "vector_store_id": vector_store_id,
+            "status": "partial_failure",
+            "message": f"Created {len(file_ids)} files but failed to add them to vector store: {str(e)}"
+        }
 
 async def add_batch_to_vector_store(client, vector_store_id: str, document_ids: list):
     """
@@ -349,7 +269,14 @@ async def add_batch_to_vector_store(client, vector_store_id: str, document_ids: 
             file_ids=document_ids
         )
         print(f"Batch creation initiated with ID: {result.id}")
-        return result
+        
+        # Return a consistent dictionary format instead of the raw APIResponse
+        return {
+            "id": result.id,
+            "status": result.status,
+            "vector_store_id": vector_store_id,
+            "file_ids": document_ids
+        }
     except Exception as e:
         print(f"Error adding batch to vector store: {str(e)}")
         raise Exception(f"Error adding batch to vector store: {str(e)}")
@@ -401,13 +328,16 @@ async def edit_vector_store(client, vector_store_id: str, file_ids: list, docume
         # Get file IDs for URLs that should be kept
         kept_file_ids = [existing_url_to_file_id[url] for url in document_urls.values() if url in existing_urls]
         
-        # Combine kept file IDs and new file IDs
+        # Keep track of all file IDs for database records
         all_file_ids = kept_file_ids + new_file_ids
         print(f"Combined file IDs: {all_file_ids}")
-        batch_result = await add_batch_to_vector_store(client, vector_store_id, all_file_ids)
-        batch_id = batch_result.id
-        # Add the batch to the vector store if there are new files
+        
+        # Only add new files to the vector store batch
+        batch_id = None
         if new_file_ids:
+            print(f"Adding only new files to vector store: {new_file_ids}")
+            batch_result = await add_batch_to_vector_store(client, vector_store_id, new_file_ids)
+            batch_id = batch_result['id']  # Using dictionary access since we updated the function
             print(f"Added batch with ID {batch_id} to vector store {vector_store_id}")
         else:
             print("No new files to add to vector store")
@@ -453,7 +383,6 @@ async def edit_vector_store(client, vector_store_id: str, file_ids: list, docume
     except Exception as e:
         print(f"Error editing vector store: {str(e)}")
         raise Exception(f"Error editing vector store: {str(e)}")
-
 
 #check for status as 'completed'
 async def check_vector_store_status(client, vector_store_id: str):
@@ -726,7 +655,6 @@ def extract_text_from_response(response):
         print(f"[ERROR] extract_text_from_response: {str(e)}")
         return str(response)
 
-
 async def delete_vector_index(vector_id: str) -> bool:
     """
     Delete a vector index using OpenAI's vectorStores API
@@ -744,3 +672,504 @@ async def delete_vector_index(vector_id: str) -> bool:
     except Exception as e:
         print(f"[ERROR] delete_vector_index: {str(e)}")
         raise Exception(f"Error deleting vector index: {str(e)}")
+
+async def generate_persona_from_qa(client, qa_data):
+    """
+    Generate a persona summary from question-answer data
+    
+    Args:
+        client: OpenAI client
+        qa_data: List of dictionaries with 'question' and 'answer' keys
+        
+    Returns:
+        Generated persona summary as a string
+    """
+    try:
+        print(f"[DEBUG] generate_persona_from_qa: Generating persona from {len(qa_data)} QA pairs")
+        
+        # Format QA data as a string
+        qa_formatted = ""
+        for i, qa in enumerate(qa_data):
+            qa_formatted += f"Question {i+1}: {qa.get('question', '')}\n"
+            qa_formatted += f"Answer {i+1}: {qa.get('answer', '')}\n\n"
+        
+        # Create system prompt
+        system_prompt = """Use the question and answers to understand the experience and expertise of the individual. 
+        Summarize them into a five to six line summary describing the individual's persona. 
+        This summary should capture their expertise, experience, and communication style 
+        so that it can be passed as a system prompt to any LLM call."""
+        
+        # Create user prompt
+        user_prompt = f"Here are the question-answer pairs:\n\n{qa_formatted}\n\nBased on these, create a concise persona summary."
+        
+        # Call OpenAI API
+        response = client.responses.create(
+            model="gpt-4o",
+            input=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ],
+            temperature=0.7
+        )
+        
+        # Extract the generated persona
+        persona_summary = extract_text_from_response(response)
+        print(f"[DEBUG] generate_persona_from_qa: Generated persona summary")
+        
+        return persona_summary
+    except Exception as e:
+        print(f"[ERROR] generate_persona_from_qa: {str(e)}")
+        raise Exception(f"Error generating persona from QA data: {str(e)}")
+
+# OpenAI Assistant API functions
+async def create_assistant(expert_name: str, memory_type: str = "expert", client_name: str = None, model: str = "gpt-4o"):
+    """
+    Create an OpenAI Assistant for a specific expert and memory type
+    
+    Args:
+        expert_name: Name of the expert
+        memory_type: Type of memory to use (llm, domain, expert, client)
+        client_name: Optional client name for client-specific memory
+        model: OpenAI model to use
+        
+    Returns:
+        Assistant object with ID
+    """
+    try:
+        print(f"[DEBUG] create_assistant: Creating assistant for expert '{expert_name}' with memory type '{memory_type}'")
+        
+        # Get expert context
+        expert_data = None
+        try:
+            # Get expert data from database
+            expert_result = supabase.table("experts").select("*").eq("name", expert_name).execute()
+            if expert_result.data and len(expert_result.data) > 0:
+                expert_data = expert_result.data[0]
+        except Exception as e:
+            print(f"[ERROR] create_assistant: Error getting expert data: {str(e)}")
+            raise Exception(f"Error getting expert data: {str(e)}")
+        
+        if not expert_data:
+            raise Exception(f"Expert '{expert_name}' not found")
+        
+        # Get vector store ID based on memory type
+        vector_id = None
+        
+        try:
+            # Get vector store IDs directly from vector_stores table
+            query = supabase.table("vector_stores").select("vector_id")
+            
+            # Apply filters based on available information
+            domain_name = expert_data.get("domain")
+            if domain_name:
+                query = query.eq("domain_name", domain_name)
+            
+            if expert_name:
+                query = query.eq("expert_name", expert_name)
+            else:
+                query = query.is_("expert_name", "null")
+            
+            if client_name:
+                if not expert_name:
+                    raise HTTPException(status_code=400, 
+                                      detail="Cannot specify client name without expert name")
+                query = query.eq("client_name", client_name)
+            else:
+                query = query.is_("client_name", "null")
+            
+            # Execute the query
+            vector_store_result = query.execute()
+            
+            # Process results
+            if vector_store_result.data and len(vector_store_result.data) > 0:
+                vector_id = vector_store_result.data[0].get("vector_id")
+            if not vector_id:
+                raise HTTPException(status_code=404, detail="Vector store not found")
+                
+            print(f"[DEBUG] create_assistant: Found {vector_id} vector store ID")
+            
+        except Exception as e:
+            print(f"[ERROR] create_assistant: Error getting vector IDs: {str(e)}")
+            # Continue execution even if there's an error retrieving vector IDs
+        
+        # Create assistant instructions based on expert context and memory type
+        instructions = f"You are an AI assistant named {expert_name}."
+        
+        if expert_data.get("context"):
+            instructions += f"\n\nYou have the following experience and expertise: {expert_data.get('context')}."
+        
+        if memory_type == "domain":
+            instructions += f"\n\nYou have access to domain knowledge about {expert_data.get('domain')}."
+        elif memory_type == "expert":
+            instructions += f"\n\nYou have access to expert-specific knowledge."
+        elif memory_type == "client" and client_name:
+            instructions += f"\n\nYou have access to client-specific knowledge for {client_name}."
+        
+        # Create the assistant
+        tools = []
+        tool_resources = {}
+        if vector_id and memory_type != "llm":
+            # Use file_search instead of retrieval as per the latest OpenAI API
+            tools.append({"type": "file_search"})
+            tool_resources = {
+                "file_search": {
+                    "vector_store_ids": [vector_id]
+                }
+            }
+        
+        assistant = client.beta.assistants.create(
+            name=f"{expert_name}_{memory_type}" + (f"_{client_name}" if client_name else ""),
+            instructions=instructions,
+            model=model,
+            tools=tools,
+            tool_resources=tool_resources
+        )
+        
+        # Store assistant ID in database
+        try:
+            # Create a table entry for the assistant
+            assistant_data = {
+                "assistant_id": assistant.id,
+                "expert_name": expert_name,
+                "memory_type": memory_type,
+                "client_name": client_name,
+                "vector_ids": [vector_id]
+            }
+            
+            supabase.table("assistants").insert(assistant_data).execute()
+            print(f"[DEBUG] create_assistant: Assistant created with ID: {assistant.id}")
+        except Exception as e:
+            print(f"[ERROR] create_assistant: Error storing assistant data: {str(e)}")
+            # Try to delete the assistant if we couldn't store it
+            try:
+                client.beta.assistants.delete(assistant.id)
+            except:
+                pass
+            raise Exception(f"Error storing assistant data: {str(e)}")
+        
+        return assistant
+    except Exception as e:
+        print(f"[ERROR] create_assistant: {str(e)}")
+        raise Exception(f"Error creating assistant: {str(e)}")
+
+async def get_or_create_assistant(expert_name: str, memory_type: str = "expert", client_name: str = None, model: str = "gpt-4o"):
+    """
+    Get an existing assistant or create a new one
+    
+    Args:
+        expert_name: Name of the expert
+        memory_type: Type of memory to use (llm, domain, expert, client)
+        client_name: Optional client name for client-specific memory
+        model: OpenAI model to use
+        
+    Returns:
+        Assistant object with ID
+    """
+    try:
+        print(f"[DEBUG] get_or_create_assistant: Looking for assistant for expert '{expert_name}' with memory type '{memory_type}'")
+        
+        # Check if assistant already exists
+        query = supabase.table("assistants").select("*").eq("expert_name", expert_name).eq("memory_type", memory_type)
+        
+        if memory_type == "client" and client_name:
+            query = query.eq("client_name", client_name)
+        elif memory_type != "client":
+            query = query.is_("client_name", "null")
+        
+        result = query.execute()
+        
+        if result.data and len(result.data) > 0:
+            assistant_id = result.data[0].get("assistant_id")
+            print(f"[DEBUG] get_or_create_assistant: Found existing assistant with ID: {assistant_id}")
+            
+            # Get the assistant from OpenAI
+            try:
+                assistant = client.beta.assistants.retrieve(assistant_id)
+                return assistant
+            except Exception as e:
+                print(f"[ERROR] get_or_create_assistant: Error retrieving assistant: {str(e)}")
+                # If the assistant doesn't exist in OpenAI, create a new one
+                print(f"[DEBUG] get_or_create_assistant: Creating new assistant since retrieval failed")
+                return await create_assistant(expert_name, memory_type, client_name, model)
+        else:
+            # Create a new assistant
+            print(f"[DEBUG] get_or_create_assistant: No existing assistant found, creating new one")
+            return await create_assistant(expert_name, memory_type, client_name, model)
+    except Exception as e:
+        print(f"[ERROR] get_or_create_assistant: {str(e)}")
+        raise Exception(f"Error getting or creating assistant: {str(e)}")
+
+async def create_thread():
+    """
+    Create a new thread for conversation
+    
+    Returns:
+        Thread object with ID
+    """
+    try:
+        print(f"[DEBUG] create_thread: Creating new thread")
+        thread = client.beta.threads.create()
+        return thread
+    except Exception as e:
+        print(f"[ERROR] create_thread: {str(e)}")
+        raise Exception(f"Error creating thread: {str(e)}")
+
+async def add_message_to_thread(thread_id: str, content: str, role: str = "user"):
+    """
+    Add a message to a thread
+    
+    Args:
+        thread_id: ID of the thread
+        content: Message content
+        role: Message role (user or assistant)
+        
+    Returns:
+        Message object
+    """
+    try:
+        print(f"[DEBUG] add_message_to_thread: Adding message to thread {thread_id}")
+        message = client.beta.threads.messages.create(
+            thread_id=thread_id,
+            role=role,
+            content=content
+        )
+        return message
+    except Exception as e:
+        print(f"[ERROR] add_message_to_thread: {str(e)}")
+        raise Exception(f"Error adding message to thread: {str(e)}")
+
+async def run_thread(thread_id: str, assistant_id: str):
+    """
+    Run a thread with an assistant
+    
+    Args:
+        thread_id: ID of the thread
+        assistant_id: ID of the assistant
+        
+    Returns:
+        Run object
+    """
+    try:
+        print(f"[DEBUG] run_thread: Running thread {thread_id} with assistant {assistant_id}")
+        run = client.beta.threads.runs.create(
+            thread_id=thread_id,
+            assistant_id=assistant_id
+        )
+        return run
+    except Exception as e:
+        print(f"[ERROR] run_thread: {str(e)}")
+        raise Exception(f"Error running thread: {str(e)}")
+
+async def get_run_status(thread_id: str, run_id: str):
+    """
+    Get the status of a run
+    
+    Args:
+        thread_id: ID of the thread
+        run_id: ID of the run
+        
+    Returns:
+        Run object
+    """
+    try:
+        print(f"[DEBUG] get_run_status: Getting status of run {run_id} in thread {thread_id}")
+        run = client.beta.threads.runs.retrieve(
+            thread_id=thread_id,
+            run_id=run_id
+        )
+        return run
+    except Exception as e:
+        print(f"[ERROR] get_run_status: {str(e)}")
+        raise Exception(f"Error getting run status: {str(e)}")
+
+async def get_thread_messages(thread_id: str, limit: int = 10):
+    """
+    Get messages from a thread
+    
+    Args:
+        thread_id: ID of the thread
+        limit: Maximum number of messages to retrieve
+        
+    Returns:
+        List of messages
+    """
+    try:
+        print(f"[DEBUG] get_thread_messages: Getting messages from thread {thread_id}")
+        messages = client.beta.threads.messages.list(
+            thread_id=thread_id,
+            limit=limit
+        )
+        return messages
+    except Exception as e:
+        print(f"[ERROR] get_thread_messages: {str(e)}")
+        raise Exception(f"Error getting thread messages: {str(e)}")
+
+async def wait_for_run_completion(thread_id: str, run_id: str, max_wait_seconds: int = 60):
+    """
+    Wait for a run to complete
+    
+    Args:
+        thread_id: ID of the thread
+        run_id: ID of the run
+        max_wait_seconds: Maximum time to wait in seconds
+        
+    Returns:
+        Run object when complete
+    """
+    import time
+    import asyncio
+    
+    try:
+        print(f"[DEBUG] wait_for_run_completion: Waiting for run {run_id} to complete")
+        start_time = time.time()
+        
+        while time.time() - start_time < max_wait_seconds:
+            run = await get_run_status(thread_id, run_id)
+            
+            if run.status in ["completed", "failed", "cancelled", "expired"]:
+                return run
+            
+            # Wait a bit before checking again
+            await asyncio.sleep(1)
+        
+        # If we get here, we timed out
+        print(f"[WARNING] wait_for_run_completion: Timed out waiting for run {run_id} to complete")
+        return await get_run_status(thread_id, run_id)
+    except Exception as e:
+        print(f"[ERROR] wait_for_run_completion: {str(e)}")
+        raise Exception(f"Error waiting for run completion: {str(e)}")
+
+async def get_assistant_response(thread_id: str, run_id: str):
+    """
+    Get the assistant's response from a completed run
+    
+    Args:
+        thread_id: ID of the thread
+        run_id: ID of the run
+        
+    Returns:
+        Assistant's response text
+    """
+    try:
+        print(f"[DEBUG] get_assistant_response: Getting response from run {run_id}")
+        
+        # Get the messages from the thread
+        messages = await get_thread_messages(thread_id, limit=1)
+        
+        if not messages.data:
+            return "No response from assistant."
+        
+        # Get the latest message (should be from the assistant)
+        latest_message = messages.data[0]
+        
+        if latest_message.role != "assistant":
+            return "No response from assistant."
+        
+        # Extract the text from the message content
+        response_text = ""
+        for content_item in latest_message.content:
+            if content_item.type == "text":
+                response_text += content_item.text.value
+        
+        return response_text
+    except Exception as e:
+        print(f"[ERROR] get_assistant_response: {str(e)}")
+        raise Exception(f"Error getting assistant response: {str(e)}")
+
+async def delete_files_in_vector_store(client, vector_store_id: str, file_ids: list):
+    """
+    Delete files from a vector store and from OpenAI
+    
+    Args:
+        client: OpenAI client
+        vector_store_id: ID of the vector store
+        file_ids: List of file IDs to delete
+        
+    Returns:
+        Dictionary with status and deleted_files count
+    """
+    try:
+        deleted_count = 0
+        failed_count = 0
+        failed_files = []
+        
+        for file_id in file_ids:
+            try:
+                # First delete from vector store
+                client.vector_stores.files.delete(
+                    vector_store_id=vector_store_id,
+                    file_id=file_id
+                )
+                print(f"Deleted file {file_id} from vector store {vector_store_id}")
+                
+                # Then delete the file from OpenAI
+                client.files.delete(file_id)
+                print(f"Deleted file {file_id} from OpenAI")
+                deleted_count += 1
+            except Exception as e:
+                print(f"Error deleting file {file_id} from OpenAI: {str(e)}")
+                failed_count += 1
+                failed_files.append(file_id)
+                # Continue with other files even if one fails
+        
+        return {
+            "status": "completed",
+            "deleted_files": deleted_count,
+            "failed_files": failed_count,
+            "failed_file_ids": failed_files
+        }
+    except Exception as e:
+        print(f"Error in delete_files_in_vector_store: {str(e)}")
+        return {
+            "status": "error",
+            "message": str(e),
+            "deleted_files": 0
+        }
+
+async def query_expert_with_assistant(expert_name: str, query: str, memory_type: str = "expert", client_name: str = None, thread_id: str = None):
+    """
+    Query an expert using the OpenAI Assistant API
+    
+    Args:
+        expert_name: Name of the expert
+        query: User query
+        memory_type: Type of memory to use (llm, domain, expert, client)
+        client_name: Optional client name for client-specific memory
+        thread_id: Optional thread ID for continuing a conversation
+        
+    Returns:
+        Dictionary with response, thread_id, and run_id
+    """
+    try:
+        print(f"[DEBUG] query_expert_with_assistant: Querying expert '{expert_name}' with memory type '{memory_type}'")
+        
+        # Get or create the assistant
+        assistant = await get_or_create_assistant(expert_name, memory_type, client_name)
+        
+        # Create a thread if one wasn't provided
+        if not thread_id:
+            thread = await create_thread()
+            thread_id = thread.id
+        
+        # Add the user message to the thread
+        await add_message_to_thread(thread_id, query)
+        
+        # Run the thread with the assistant
+        run = await run_thread(thread_id, assistant.id)
+        
+        # Wait for the run to complete
+        run = await wait_for_run_completion(thread_id, run.id)
+        
+        # Get the assistant's response
+        response = await get_assistant_response(thread_id, run.id)
+        
+        return {
+            "response": {"text": response},
+            "thread_id": thread_id,
+            "run_id": run.id,
+            "status": run.status
+        }
+    except Exception as e:
+        print(f"[ERROR] query_expert_with_assistant: {str(e)}")
+        raise Exception(f"Error querying expert with assistant: {str(e)}")
+
