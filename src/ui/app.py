@@ -22,7 +22,7 @@ st.sidebar.subheader("Navigation")
 
 page = st.sidebar.radio(
     "Select a page:",
-    ["Create expert", "Query Expert using Threads", "Update Expert Context", "Update Expert memory", "Update Domain Memory"]
+    ["Create expert", "Query Expert using Threads", "Update Expert Context", "Update Expert memory", "Update Domain Memory", "YouTube Transcript"]
 )
 def create_expert(expert_name, domain_name, qa_pairs, document_urls):
     try:
@@ -417,9 +417,55 @@ def query_expert_with_assistant(expert_name, query, memory_type="expert", client
         print(f"[UI ERROR] query_expert_with_assistant: Request failed: {str(e)}")
         return {"error": str(e)}, 500
 
+# Function to get YouTube transcript
+def get_youtube_transcript_from_api(video_url):
+    try:
+        response = requests.post(
+            f"{API_BASE_URL}/youtube/transcript",
+            json={"video_url": video_url}
+        )
+        if response.status_code == 200:
+            response_json = response.json()
+            return response_json, response.status_code
+        return {"error": f"Error: {response.status_code} - {response.text}"}, response.status_code
+    except Exception as e:
+        print(f"Error in get_youtube_transcript_from_api: {str(e)}")
+        return {"error": str(e)}, 500
 
+# YouTube Transcript page
+if page == "YouTube Transcript":
+    st.title("YouTube Transcript Extractor")
+    
+    st.write("Enter a YouTube video URL to extract its transcript.")
+    
+    # Input for YouTube URL
+    video_url = st.text_input("YouTube Video URL", placeholder="https://www.youtube.com/watch?v=example")
+    
+    # Create columns for the buttons
+    button_cols = st.columns([1, 3])
+    
+    with button_cols[0]:
+        if st.button("Extract Transcript", key="extract_transcript"):
+            if video_url:
+                with st.spinner("Extracting transcript..."):
+                    try:
+                        transcript, status_code = get_youtube_transcript_from_api(video_url)
+                        
+                        if transcript:
+                            st.success("Transcript extracted successfully!")
+                            
+                            st.subheader("Transcript")
+                            with st.expander("View Full Transcript", expanded=True):
+                                st.text_area(f"Transcript", transcript, height=400)
+                                
+                        else:
+                            st.error("No transcript found for this video.")
+                    except Exception as e:
+                        st.error(f"Error extracting transcript: {str(e)}")
+            else:
+                st.warning("Please enter a YouTube video URL.")
 
-if page == "Create expert":
+elif page == "Create expert":
     st.title("Create Expert")
     
     with st.form("expert_form"):
@@ -730,7 +776,7 @@ elif page == "Update Expert memory":
                 if doc_selections.get(doc_name, False):
                     all_urls[doc_name] = doc.get("document_link", "")
         else:
-            st.info(f"No existing documents found for domain {selected_domain}.")
+            st.info(f"No existing documents found for domain {domain_name}.")
             
         # New document inputs
         st.subheader("Add New Documents")    
@@ -839,7 +885,7 @@ elif page == "Update Domain Memory":
                 if doc_selections.get(doc_name, False):
                     all_urls[doc_name] = doc.get("document_link", "")
         else:
-            st.info(f"No existing documents found for domain {selected_domain}.")
+            st.info(f"No existing documents found for domain {domain_name}.")
         
         # New document inputs
         st.subheader("Add New Documents")

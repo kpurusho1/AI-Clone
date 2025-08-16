@@ -1,12 +1,15 @@
 import os
 import httpx
 import urllib.parse
-from typing import List
+from typing import List, Dict, Any, Optional
 from openai import OpenAI
 from io import BytesIO
 from llama_cloud_services import LlamaParse
+from youtube_transcript_api import YouTubeTranscriptApi
 from config import OPENAI_API_KEY, LLAMAPARSE_API_KEY
 from database import supabase
+from llama_index.readers.youtube_transcript import YoutubeTranscriptReader
+from llama_index.readers.youtube_transcript.utils import is_youtube_video
 
 # Initialize OpenAI client
 client = OpenAI(api_key=OPENAI_API_KEY)
@@ -27,6 +30,80 @@ llama_parser = LlamaParse(
     verbose=True,
     language="en"       # optionally define a language, default=en
 )
+
+def get_youtube_transcript(video_url: str):
+    if not is_youtube_video(video_url):
+        raise ValueError(f"Invalid YouTube URL: {video_url}")
+    print(f"Getting transcript for YouTube video: {video_url}")
+    
+    try:
+        # Extract video ID from URL
+        video_id = extract_youtube_id(video_url)
+        if not video_id:
+            raise ValueError(f"Could not extract YouTube video ID from URL: {video_url}")
+            
+        print(f"Fetching transcript for YouTube video ID: {video_id}")
+        
+        # Get transcript using YouTubeTranscriptApi directly with the fetch method
+        transcript_api = YouTubeTranscriptApi()
+        fetched_transcript = transcript_api.fetch(video_id, languages=['en'])
+        
+        # Format transcript into a single text with timestamps
+        full_transcript = ""
+        for snippet in fetched_transcript.snippets:
+            timestamp = snippet.start
+            minutes = int(timestamp // 60)
+            seconds = int(timestamp % 60)
+            time_str = f"[{minutes:02d}:{seconds:02d}] "
+            full_transcript += snippet.text + " "
+        '''
+        # Create a document object similar to what llama_index would return
+        from llama_index.core.schema import Document
+        document = Document(
+            text=full_transcript,
+            metadata={
+                "source": video_url,
+                "video_id": fetched_transcript.video_id,
+                "language": fetched_transcript.language,
+                "language_code": fetched_transcript.language_code,
+                "is_generated": fetched_transcript.is_generated,
+                "title": f"YouTube Transcript: {fetched_transcript.video_id}"
+            }
+        )
+        '''
+        print(f"Successfully retrieved transcript for YouTube video: {video_url}")
+        return full_transcript
+        
+    except Exception as e:
+        print(f"Error getting YouTube transcript: {str(e)}")
+        raise Exception(f"Failed to retrieve YouTube transcript: {str(e)}")
+
+def extract_youtube_id(url: str) -> Optional[str]:
+    """
+    Extract YouTube video ID from various YouTube URL formats
+    
+    Args:
+        url: YouTube URL in any format
+        
+    Returns:
+        YouTube video ID or None if not a valid YouTube URL
+    """
+    import re
+    # Regular expressions for different YouTube URL formats
+    patterns = [
+        r'(?:youtube\.com\/watch\?v=|youtu\.be\/)([\w-]+)',  # Standard and shortened URLs
+        r'youtube\.com\/embed\/([\w-]+)',                      # Embed URLs
+        r'youtube\.com\/v\/([\w-]+)',                          # Old embed URLs
+        r'youtube\.com\/user\/[\w-]+\/\?v=([\w-]+)',         # User URLs
+        r'youtube\.com\/attribution_link\?.*v%3D([\w-]+)',    # Attribution links
+    ]
+    
+    for pattern in patterns:
+        match = re.search(pattern, url)
+        if match:
+            return match.group(1)
+    
+    return None
 
 async def create_vector_store(client, vector_name: str):
     try:
@@ -58,8 +135,21 @@ async def create_file_for_vector_store(client, document_url: str, document_name:
         print(f"Processing document from URL: {document_url}")
         temp_path = None
         
+        if document_url.__contains__("youtube"):
+            # get_youtube_transcript
+            transcript = get_youtube_transcript(document_url)
+            # Convert string to bytes before using BytesIO
+            file_content = BytesIO(transcript.encode('utf-8'))
+            # Create a more descriptive filename with .txt extension
+            video_id = extract_youtube_id(document_url) or "video"
+            file_name = f"youtube_transcript_{video_id}.txt"
+            file_tuple = (file_name, file_content)
+            result = client.files.create(
+                file=file_tuple,
+                purpose="assistants"
+            )
         # Download the document if it's a web URL
-        if document_url.startswith(('http://', 'https://')):
+        elif document_url.startswith(('http://', 'https://')):
             # Extract file extension from URL
             url_path = urllib.parse.urlparse(document_url).path
             file_extension = os.path.splitext(url_path)[1]
@@ -91,7 +181,39 @@ async def create_file_for_vector_store(client, document_url: str, document_name:
 
         else:
             # It's a local file path
-            with open(document_url, "rb") as file_content:
+            # Try different path resolutions to find the file
+            file_path = document_url
+            found = False
+            
+            # List of possible base directories to try
+            base_dirs = [
+                os.getcwd(),  # Current working directory
+                os.path.dirname(os.path.abspath(__file__)),  # Directory of this script
+                os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),  # Project root
+                os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "Docs"),  # Docs folder
+                os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "data"),  # data folder
+                os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "documents")  # documents folder
+            ]
+            
+            # First try the path as is
+            if os.path.exists(file_path) and os.path.isfile(file_path):
+                found = True
+                print(f"Found file at original path: {file_path}")
+            else:
+                # Try resolving against different base directories
+                for base_dir in base_dirs:
+                    resolved_path = os.path.join(base_dir, document_url)
+                    print(f"Trying path: {resolved_path}")
+                    if os.path.exists(resolved_path) and os.path.isfile(resolved_path):
+                        file_path = resolved_path
+                        found = True
+                        print(f"Found file at: {file_path}")
+                        break
+            
+            if not found:
+                raise FileNotFoundError(f"Could not find file at {document_url} or any resolved paths")
+                
+            with open(file_path, "rb") as file_content:
                 result = client.files.create(
                     file=file_content,
                     purpose="assistants"

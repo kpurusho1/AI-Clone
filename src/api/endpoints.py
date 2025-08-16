@@ -18,7 +18,8 @@ from models import (
     RunThreadRequest, RunThreadResponse,
     GetRunStatusRequest, GetRunStatusResponse,UpdateFilesToExpertVectorCreate,
     GetThreadMessagesRequest, GetThreadMessagesResponse,
-    UpdateExpertPersonaRequest,InitializeExpertMemoryRequest, UpdateDomainFilesConfigRequest
+    UpdateExpertPersonaRequest,InitializeExpertMemoryRequest, UpdateDomainFilesConfigRequest,
+    YouTubeTranscriptRequest
 )
 
 from utils import (
@@ -30,7 +31,9 @@ from utils import (
     create_assistant, get_or_create_assistant, create_thread,
     add_message_to_thread, run_thread, get_run_status,
     get_thread_messages, query_expert_with_assistant,
-    generate_persona_from_qa
+    generate_persona_from_qa,
+    # YouTube transcript function
+    get_youtube_transcript
 )
 
 router = APIRouter()
@@ -2034,4 +2037,28 @@ async def query_expert_with_assistant_endpoint(request: QueryRequest):
         
         return result
     except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/youtube/transcript")
+async def youtube_transcript_endpoint(request: YouTubeTranscriptRequest):
+    """
+    Get transcript from a YouTube video URL
+    
+    Args:
+        request: YouTubeTranscriptRequest with video_url
+        
+    Returns:
+        List of documents containing transcript text and metadata
+    """
+    try:
+        print(f"Getting transcript for YouTube video: {request.video_url}")
+        
+        # Get transcript using the utility function
+        transcript = get_youtube_transcript(request.video_url)
+        
+        return transcript
+    except ValueError as ve:
+        raise HTTPException(status_code=400, detail=str(ve))
+    except Exception as e:
+        print(f"Error getting YouTube transcript: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
