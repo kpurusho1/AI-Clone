@@ -184,3 +184,6 @@ class ThreadMessage(BaseModel):
 class GetThreadMessagesResponse(BaseModel):
     messages: List[ThreadMessage]
 
+class YouTubeTranscriptRequest(BaseModel):
+    video_url: str
+
