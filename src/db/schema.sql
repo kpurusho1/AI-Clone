@@ -8,7 +8,7 @@ CREATE TABLE IF NOT EXISTS domains (
 -- Create Expert table
 CREATE TABLE IF NOT EXISTS experts (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    name TEXT NOT NULL,
+    name TEXT NOT NULL UNIQUE,
     domain TEXT NOT NULL,
     context TEXT NOT NULL,
     CONSTRAINT fk_domain
