@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS documents (
     included_in_default BOOLEAN NOT NULL DEFAULT FALSE,
     client_name TEXT,
     openai_file_id TEXT,
+    storage_path TEXT,
     CONSTRAINT fk_domain
         FOREIGN KEY (domain)
         REFERENCES domains (domain_name)
