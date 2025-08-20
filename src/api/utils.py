@@ -1100,7 +1100,7 @@ async def create_assistant(expert_name: str, memory_type: str = "expert", model:
                 "assistant_id": assistant.id,
                 "expert_name": expert_name,
                 "memory_type": memory_type,
-                "vector_ids": [vector_id]
+                "vector_id": vector_id
             }
             
             supabase.table("assistants").insert(assistant_data).execute()
