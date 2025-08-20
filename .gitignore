@@ -22,6 +22,10 @@ var/
 
 # Virtual Environment
 venv/
+
+# Environment variables
+.env
+.env.example
 ENV/
 env/
 aiclone/

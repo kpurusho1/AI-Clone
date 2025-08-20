@@ -617,6 +617,21 @@ async def edit_vector_store(client, vector_store_id: str, file_ids: list, docume
         if files_to_delete:
             print(f"Deleting {len(files_to_delete)} files that are no longer needed: {files_to_delete}")
             try:
+                # First, get the documents to delete to check for storage paths
+                docs_to_delete = supabase.table("documents").select("*").in_("openai_file_id", files_to_delete).execute()
+                
+                # Delete files from Supabase storage if they have a storage path
+                for doc in docs_to_delete.data:
+                    storage_path = doc.get("storage_path")
+                    if storage_path:
+                        try:
+                            print(f"Deleting file from Supabase storage: {storage_path}")
+                            supabase.storage.from_("documents").remove([storage_path])
+                            print(f"Successfully deleted file from storage: {storage_path}")
+                        except Exception as storage_error:
+                            print(f"Error deleting file from storage: {storage_path}, Error: {str(storage_error)}")
+                            # Continue with deletion process even if storage deletion fails
+                
                 # Delete from documents table where openai_file_id is in files_to_delete
                 delete_result = supabase.table("documents").delete().in_("openai_file_id", files_to_delete).execute()
                 
@@ -1100,7 +1115,7 @@ async def create_assistant(expert_name: str, memory_type: str = "expert", model:
                 "assistant_id": assistant.id,
                 "expert_name": expert_name,
                 "memory_type": memory_type,
-                "vector_ids": [vector_id]
+                "vector_id": vector_id  # Changed from vector_ids to match database schema
             }
             
             supabase.table("assistants").insert(assistant_data).execute()
