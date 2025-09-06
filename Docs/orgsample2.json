@@ -1,0 +1,70 @@
+{
+    "Hospital Name": "Sunrise Children’s Clinic",
+    "Location": "Anna Nagar, Chennai, India",
+    "Hospital Hours": "Mon-Sun 8am-10pm",
+    "Hospital Front Desk Phone": "+91-44-55667788",
+    "Hospital Administrator Phone": "+91-9944332211",
+    "Specialties": {
+      "Pediatrics": [
+        {
+          "Name": "Dr. Kavitha Menon",
+          "Consultation Hours": "Mon-Sat 10am-1pm, 5pm-7pm",
+          "Consultation Fee": "₹500",
+          "Front Desk Contact": "+91-44-55667788 Ext 201"
+        }
+      ],
+      "Pediatric Neurology": [
+        {
+          "Name": "Dr. Arun Prakash",
+          "Consultation Hours": "Tue-Thu-Sat 2pm-5pm",
+          "Consultation Fee": "₹1000",
+          "Front Desk Contact": "+91-44-55667788 Ext 202"
+        }
+      ]
+    },
+    "Inpatient Room Fees": {
+      "AC Suite": "₹5000/day",
+      "Non-AC Suite": "₹3800/day",
+      "Standard AC": "₹2500/day",
+      "Standard Non-AC": "₹1800/day"
+    },
+    "Diagnostics Lab": {
+      "Floor": "1st Floor",
+      "Directions": "Take stairs/elevator to 1st floor, lab is next to vaccination clinic"
+    },
+    "Diagnostics": {
+      "MRI": {
+        "Floor": "Basement",
+        "Directions": "From front desk, take elevator down to basement, MRI center on left"
+      },
+      "CT": {
+        "Floor": "Basement",
+        "Directions": "Next to MRI suite"
+      },
+      "X-ray": {
+        "Floor": "Ground Floor",
+        "Directions": "From entrance, right-hand corridor, X-ray at first door"
+      }
+    },
+    "Pharmacy": {
+      "Floor": "Ground Floor",
+      "Directions": "Left side of reception hall"
+    },
+    "ICU": {
+      "Location": "2nd Floor, Pediatric ICU (PICU)",
+      "Directions": "Lift to 2nd floor, turn right, PICU signboard visible"
+    },
+    "Operation Theatre": {
+      "Location": "2nd Floor, opposite PICU",
+      "Directions": "Lift to 2nd floor, OT block opposite PICU entrance"
+    },
+    "Cafeteria": {
+      "Location": "Rooftop, 3rd Floor",
+      "Directions": "Take elevator to 3rd floor, cafeteria on rooftop terrace",
+      "Menu": [
+        {"Item": "Milkshake", "Price": "₹60"},
+        {"Item": "Idli (2 pcs)", "Price": "₹30"},
+        {"Item": "Mini Meals", "Price": "₹100"}
+      ]
+    }
+  }

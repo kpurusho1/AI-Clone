@@ -1,0 +1,71 @@
+{
+    "Hospital Name": "CityCare Multispeciality Hospital",
+    "Location": "MG Road, Bengaluru, India",
+    "Hospital Hours": "24/7",
+    "Hospital Front Desk Phone": "+91-80-22334455",
+    "Hospital Administrator Phone": "+91-9876543210",
+    "Specialties": {
+      "Cardiology": [
+        {
+          "Name": "Dr. Anjali Sharma",
+          "Consultation Hours": "Mon-Fri 10am-2pm",
+          "Consultation Fee": "₹800",
+          "Front Desk Contact": "+91-80-22334455 Ext 101"
+        }
+      ],
+      "Pediatrics": [
+        {
+          "Name": "Dr. Ramesh Iyer",
+          "Consultation Hours": "Mon-Sat 9am-1pm, 4pm-6pm",
+          "Consultation Fee": "₹600",
+          "Front Desk Contact": "+91-80-22334455 Ext 102"
+        }
+      ]
+    },
+    "Inpatient Room Fees": {
+      "AC Suite": "₹6000/day",
+      "Non-AC Suite": "₹4500/day",
+      "Standard AC": "₹3000/day",
+      "Standard Non-AC": "₹2000/day"
+    },
+    "Diagnostics Lab": {
+      "Floor": "2nd Floor",
+      "Directions": "Take the main elevator to 2nd floor, turn left from elevator lobby"
+    },
+    "Diagnostics": {
+      "MRI": {
+        "Floor": "Basement 1",
+        "Directions": "From front desk, take lift to B1, MRI unit on right side"
+      },
+      "CT": {
+        "Floor": "Basement 1",
+        "Directions": "From front desk, take lift to B1, CT room next to MRI"
+      },
+      "X-ray": {
+        "Floor": "Ground Floor",
+        "Directions": "From front desk, turn right corridor, X-ray room at the end"
+      }
+    },
+    "Pharmacy": {
+      "Floor": "Ground Floor",
+      "Directions": "Opposite to front desk counter"
+    },
+    "ICU": {
+      "Location": "3rd Floor",
+      "Directions": "Take the lift to 3rd floor, ICU entrance on left wing"
+    },
+    "Operation Theatre": {
+      "Location": "4th Floor",
+      "Directions": "Take the lift to 4th floor, OT block straight ahead"
+    },
+    "Cafeteria": {
+      "Location": "Ground Floor, rear block",
+      "Directions": "Walk past front desk straight to rear block",
+      "Menu": [
+        {"Item": "Tea", "Price": "₹20"},
+        {"Item": "Coffee", "Price": "₹30"},
+        {"Item": "Vegetable Sandwich", "Price": "₹50"},
+        {"Item": "South Indian Thali", "Price": "₹120"}
+      ]
+    }
+  }

@@ -1,0 +1,48 @@
+{
+  "domains": [
+    {
+      "domain_name": "Pediatrics",
+      "files": [
+        {
+          "file_name": "Caring for Kids (Child Health Guide)",
+          "url": "https://jasu.kg/wp-content/uploads/2024/04/Ghai-Essential-Pediatrics-8th.pdf"
+        },
+        {
+          "file_name": "Pediatric Pressure Ulcer Prevention Supplement",
+          "url": "https://www.canada.ca/content/dam/hc-sc/migration/hc-sc/fniah-spnia/alt_formats/pdf/services/nurs-infirm/clini/pediat/asses-eval-eng.pdf"
+        }
+      ]
+    },
+    {
+      "domain_name": "Oncology",
+      "files": [
+        {
+          "file_name": "Cancer Nutrition Guide – HEAL Well",
+          "url": "https://cinj.org/sites/cinj/files/documents/heal-well-guide.pdf"
+        },
+        {
+          "file_name": "Breast Cancer Patient Guide",
+          "url": "https://www.pcf.org/wp-content/uploads/2017/08/ProstateCancerPatientGuide_Singles_Final.pdf"
+        }
+      ]
+    },
+    {
+      "domain_name": "Psychiatry",
+      "files": [
+        {
+          "file_name": "4.H Tool – Considerations for Child with Complex Medical Needs",
+          "url": "https://www.in.gov/dcs/files/4.H-Tool-Considerations-for-Child-with-Complex-Medical-Needs.pdf"
+        }
+      ]
+    },
+    {
+      "domain_name": "General Medicine",
+      "files": [
+        {
+          "file_name": "Communicable Disease Guideline Chart for Child Care Providers",
+          "url": "https://www.in.gov/fssa/carefinder/files/Communicable-disease-chart.pdf"
+        }
+      ]
+    }
+  ]
+}

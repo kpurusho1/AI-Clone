@@ -1,0 +1,79 @@
+{
+    "Hospital Name": "Green Valley General Hospital",
+    "Location": "Sector 21, Gurugram, India",
+    "Hospital Hours": "24/7",
+    "Hospital Front Desk Phone": "+91-124-44332211",
+    "Hospital Administrator Phone": "+91-9811122233",
+    "Specialties": {
+      "Orthopedics": [
+        {
+          "Name": "Dr. Vivek Khanna",
+          "Consultation Hours": "Mon-Fri 11am-3pm",
+          "Consultation Fee": "₹700",
+          "Front Desk Contact": "+91-124-44332211 Ext 301"
+        }
+      ],
+      "Gynecology": [
+        {
+          "Name": "Dr. Meera Nair",
+          "Consultation Hours": "Mon-Sat 10am-12pm, 6pm-8pm",
+          "Consultation Fee": "₹900",
+          "Front Desk Contact": "+91-124-44332211 Ext 302"
+        }
+      ],
+      "General Medicine": [
+        {
+          "Name": "Dr. Sanjay Rao",
+          "Consultation Hours": "Daily 9am-11am, 5pm-7pm",
+          "Consultation Fee": "₹600",
+          "Front Desk Contact": "+91-124-44332211 Ext 303"
+        }
+      ]
+    },
+    "Inpatient Room Fees": {
+      "AC Suite": "₹7000/day",
+      "Non-AC Suite": "₹5000/day",
+      "Standard AC": "₹3500/day",
+      "Standard Non-AC": "₹2500/day"
+    },
+    "Diagnostics Lab": {
+      "Floor": "Ground Floor, Block B",
+      "Directions": "From front desk, walk straight 20m, lab on right"
+    },
+    "Diagnostics": {
+      "MRI": {
+        "Floor": "Basement 2",
+        "Directions": "Use lift near Block B to B2, MRI signage clearly marked"
+      },
+      "CT": {
+        "Floor": "Basement 2",
+        "Directions": "Next to MRI suite, same block"
+      },
+      "X-ray": {
+        "Floor": "Ground Floor, Block A",
+        "Directions": "Turn left from front desk, X-ray unit first door"
+      }
+    },
+    "Pharmacy": {
+      "Floor": "Ground Floor, Block A",
+      "Directions": "Adjacent to main front desk counter"
+    },
+    "ICU": {
+      "Location": "5th Floor",
+      "Directions": "Take elevator to 5th floor, ICU corridor is to the right"
+    },
+    "Operation Theatre": {
+      "Location": "6th Floor, Surgical Wing",
+      "Directions": "Take elevator to 6th floor, OT block directly opposite lift lobby"
+    },
+    "Cafeteria": {
+      "Location": "Basement 1",
+      "Directions": "From reception, take elevator to B1, cafeteria near parking entrance",
+      "Menu": [
+        {"Item": "Tea", "Price": "₹15"},
+        {"Item": "Coffee", "Price": "₹25"},
+        {"Item": "Veg Burger", "Price": "₹70"},
+        {"Item": "North Indian Thali", "Price": "₹150"}
+      ]
+    }
+  }

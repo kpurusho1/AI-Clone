@@ -1,0 +1,106 @@
+{
+    "Consultations": [
+      {
+        "Context": ["Acute consultation for wheezing and breathlessness"],
+        "Analysis": ["Likely mild asthma exacerbation triggered by viral infection"],
+        "Treatment Plan": ["Nebulized salbutamol", "Start inhaled corticosteroid if recurrent"],
+        "Investigation": ["Spirometry at follow-up", "Allergy panel if recurrent"],
+        "Summary": ["First episode of wheezing requiring nebulization"],
+        "Diagnosis": ["Probable childhood asthma"],
+        "History": ["Cough and cold for 3 days, developed wheezing and breathlessness last night"],
+        "Examination": ["Respiratory rate 26/min, mild wheezing on auscultation, O2 sat 97%"],
+        "Key Facts": ["First wheezing episode, family history of asthma (mother)"],
+        "Timestamped Transcription": [
+          {"00:00": "Parent: She was coughing for three days, last night she started wheezing."},
+          {"00:08": "Doctor: Has she had any wheezing episodes before?"},
+          {"00:10": "Parent: No, this is the first time."},
+          {"00:20": "Doctor: We'll give her nebulization now and see her response."}
+        ],
+        "Prescription Data": ["Salbutamol inhaler with spacer", "Paracetamol if fever"],
+        "Chief Complaint(s)": ["Cough and wheezing"],
+        "Present Illness Information": ["Symptoms for 3 days, worsening last night"],
+        "Preliminary Assessment": ["First asthma-like episode"],
+        "Next Steps": ["Follow-up in 1 week", "Monitor frequency of wheezing episodes"],
+        "Associated Symptoms": ["Cough", "Mild fever"],
+        "Past Medical History": ["Recurrent viral infections, sore throat at age 7"],
+        "Doctor's Observations": ["Child mildly distressed but responds well to nebulization"],
+        "Referral Details": ["Consider pediatric pulmonology referral if recurrent"],
+        "Subtext Analysis": [
+          "Pre-consultation anxiety level: Very high (parent worried about breathing difficulty)",
+          "Post-consultation anxiety level: Moderate (relieved after nebulization, but worried about recurrence)",
+          "Financial concerns of patient: Mild – inhaler and follow-up costs",
+          "Doctor communication effectiveness: High – explained condition, long-term monitoring"
+        ],
+        "Patient Details": ["Female, 9 years old, family history of asthma (mother)"],
+        "Hospital/Doctor Details": ["Dr. Ramesh Iyer, Pediatrics, Sunrise Children’s Clinic"]
+      },
+      {
+        "Context": ["Acute consultation for fever and sore throat in a child"],
+        "Analysis": ["Likely viral pharyngitis", "Low risk of bacterial infection"],
+        "Treatment Plan": ["Supportive care with paracetamol", "Hydration and rest"],
+        "Investigation": ["Throat swab if symptoms persist >3 days"],
+        "Summary": ["Child presents with fever, sore throat, no alarming symptoms"],
+        "Diagnosis": ["Viral pharyngitis"],
+        "History": ["Onset of fever 2 days ago, sore throat since yesterday"],
+        "Examination": ["Temp 38.2°C, mild throat redness, no exudates, chest clear"],
+        "Key Facts": ["Previously healthy child, first febrile episode in 6 months"],
+        "Timestamped Transcription": [
+          {"00:00": "Doctor: Hello, what brings you and your child in today?"},
+          {"00:05": "Parent: She has had fever for two days and complains of throat pain."},
+          {"00:12": "Doctor: Has she been eating and drinking fluids?"},
+          {"00:15": "Parent: Yes, but less than usual."},
+          {"00:25": "Doctor: I examined her throat; looks red but not bacterial. We'll give paracetamol and observe."}
+        ],
+        "Prescription Data": ["Paracetamol syrup 250mg/5ml, 5ml every 6 hours as needed"],
+        "Chief Complaint(s)": ["Fever for 2 days", "Sore throat"],
+        "Present Illness Information": ["No cough, no rash, mild throat redness, fever responds to paracetamol"],
+        "Preliminary Assessment": ["Viral upper respiratory infection"],
+        "Next Steps": ["Symptomatic treatment", "Return if fever >39°C or persists beyond 3 days"],
+        "Associated Symptoms": ["Mild sore throat", "Reduced appetite"],
+        "Past Medical History": ["Occasional viral colds"],
+        "Doctor's Observations": ["Child alert, hydrated, no respiratory distress"],
+        "Referral Details": ["Not required at present"],
+        "Subtext Analysis": [
+          "Pre-consultation anxiety level: High (parent worried about fever severity)",
+          "Post-consultation anxiety level: Mild (doctor reassurance provided)",
+          "Financial concerns of patient: Minimal – standard treatment prescribed",
+          "Doctor communication effectiveness: High – clear reassurance and return precautions given"
+        ],
+        "Patient Details": ["Female, 7 years old, previously healthy"],
+        "Hospital/Doctor Details": ["Dr. Ramesh Iyer, Pediatrics, Sunrise Children’s Clinic"]
+      },
+      {
+        "Context": ["Initial pediatric consultation for cough and runny nose"],
+        "Analysis": ["Likely viral upper respiratory infection", "No complications"],
+        "Treatment Plan": ["Supportive care: fluids, rest, paracetamol if fever"],
+        "Investigation": ["None at present"],
+        "Summary": ["Previously healthy 5-year-old, presenting with mild viral cold"],
+        "Diagnosis": ["Viral URI"],
+        "History": ["Started coughing 2 days ago, mild nasal congestion, no fever"],
+        "Examination": ["Afebrile, mild nasal discharge, lungs clear"],
+        "Key Facts": ["First illness requiring consultation, otherwise healthy child"],
+        "Timestamped Transcription": [
+          {"00:00": "Parent: She’s coughing since two days, no fever yet."},
+          {"00:05": "Doctor: She looks comfortable, chest sounds normal."},
+          {"00:10": "Doctor: Likely a viral cold, no antibiotics needed."}
+        ],
+        "Prescription Data": ["Paracetamol syrup if fever develops", "Saline nasal drops"],
+        "Chief Complaint(s)": ["Cough", "Runny nose"],
+        "Present Illness Information": ["No fever, no shortness of breath"],
+        "Preliminary Assessment": ["Viral cold"],
+        "Next Steps": ["Symptomatic treatment", "Return if fever or worsening cough"],
+        "Associated Symptoms": ["Nasal congestion"],
+        "Past Medical History": ["None"],
+        "Doctor's Observations": ["Active child, playful during exam"],
+        "Referral Details": ["Not required"],
+        "Subtext Analysis": [
+          "Pre-consultation anxiety level: Low (mild illness)",
+          "Post-consultation anxiety level: Very low",
+          "Financial concerns of patient: None",
+          "Doctor communication effectiveness: High – avoided unnecessary antibiotics"
+        ],
+        "Patient Details": ["Female, 5 years old"],
+        "Hospital/Doctor Details": ["Dr. Ramesh Iyer, Pediatrics, Sunrise Children’s Clinic"]
+      }
+    ]
+  }

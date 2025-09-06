@@ -1,0 +1,39 @@
+{
+  "Consultations": [  
+    {
+      "Context": ["Follow-up consultation for diabetes management and anxiety"],
+      "Analysis": ["Type 2 Diabetes under moderate control", "Patient experiencing lifestyle-related anxiety"],
+      "Treatment Plan": ["Continue metformin 500mg twice daily", "Encourage stress management techniques"],
+      "Investigation": ["HbA1c test in 3 months", "Blood pressure monitoring"],
+      "Summary": ["Patient presents with controlled diabetes but reports anxiety related to work stress."],
+      "Diagnosis": ["Type 2 Diabetes Mellitus", "Mild generalized anxiety"],
+      "History": ["Patient diagnosed with diabetes 3 years ago, on oral hypoglycemics"],
+      "Examination": ["BP 128/82 mmHg, Pulse 84 bpm, No pedal edema"],
+      "Key Facts": ["Stable diabetes, anxious mood, compliant with medication"],
+      "Timestamped Transcription": [
+        {"00:00": "Doctor: Good morning, how have you been since your last visit?"},
+        {"00:05": "Patient: I've been okay, sugar levels are mostly fine but I feel anxious lately."},
+        {"00:15": "Doctor: I see, can you describe the anxiety?"},
+        {"00:20": "Patient: It's mostly before work meetings, I feel restless."},
+        {"00:30": "Doctor: Alright, we'll look into stress management strategies along with your diabetes care."}
+      ],
+      "Prescription Data": ["Metformin 500mg BID"],
+      "Chief Complaint(s)": ["Feeling anxious before work", "Follow-up for diabetes"],
+      "Present Illness Information": ["Anxiety symptoms for 2 months, no panic attacks, diabetes under medication"],
+      "Preliminary Assessment": ["Stable diabetes, situational anxiety"],
+      "Next Steps": ["Schedule HbA1c in 3 months", "Follow-up in 6 weeks"],
+      "Associated Symptoms": ["Restlessness, mild insomnia"],
+      "Past Medical History": ["Type 2 Diabetes Mellitus (3 years)"],
+      "Doctor's Observations": ["Patient appears slightly restless, otherwise stable vitals"],
+      "Referral Details": ["Consider referral to psychologist if anxiety worsens"],
+      "Subtext Analysis": [
+        "Pre-consultation anxiety level: Moderate",
+        "Post-consultation anxiety level: Reduced",
+        "Financial concerns of patient: Not expressed",
+        "Doctor communication effectiveness: High – empathetic listening and reassurance"
+      ],
+      "Patient Details": ["Male, 45 years old, employed, non-smoker"],
+      "Hospital/Doctor Details": ["Dr. Anjali Sharma, Internal Medicine, CityCare Hospital"]
+    }
+  ]
+}
