@@ -600,18 +600,22 @@ async def query_clone(request: QueryRequest):
         org_id = None
         if request.org_name:
             org_id = await get_org_id(request.org_name)
+            print (f"[API DEBUG] query_clone: Organization ID: {org_id}")
         if not org_id:
             raise HTTPException(status_code=404, detail="Organization not found")
         
         expert_id = None
         if request.expert_name:
             expert_id = await get_expert_id(org_id, request.domain_name, request.expert_name)
+            print (f"[API DEBUG] query_clone: Expert ID: {expert_id}")
             if not expert_id:
                 raise HTTPException(status_code=404, detail="Expert not found")
 
         client_id = None
         if (request.memory_type == "client" or request.memory_type == "myclient"):
+            print (f"[API DEBUG] query_clone: OrgClient ID: {request.org_client_id}")
             client_id = await get_client_id(org_id, request.org_client_id, expert_id, request.memory_type)
+            print (f"[API DEBUG] query_clone: Client ID: {client_id}")
             if not client_id:
                 raise HTTPException(status_code=404, detail="Client not found")
         
@@ -1824,16 +1828,26 @@ async def get_file_ids(vectorname: Optional[str] = None):
 
 async def get_org_id(org_name: str):
     """
-    Get all organizations
+    Get organization ID by name
     """
     try:
-        print("Getting all organizations")
+        # Check if org_name is None or empty
+        if not org_name or org_name == "None":
+            print("Warning: org_name is None or empty")
+            return None
+            
+        print(f"Getting organization ID for: {org_name}")
         result = supabase.table("organizations").select("id").eq("org_name", org_name).execute()
         print(f"Found {len(result.data)} organizations")
-        return result.data[0].get("id")
+        
+        if len(result.data) > 0:
+            return result.data[0].get("id")
+        else:
+            print(f"No organization found with name: {org_name}")
+            return None
     except Exception as e:
-        print(f"Error getting organizations: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        print(f"Error getting organization ID: {str(e)}")
+        return None
 
 
 @router.get("/organization", response_model=List[dict])
@@ -1852,39 +1866,75 @@ async def get_organization():
 
 async def get_client_id(org_id: UUID, org_client_id: int, expert_id: UUID = None, memory_type: str = "client"):
     """
-    Get all clients
+    Get client ID by org_id, org_client_id, and optionally expert_id
     """
     try:
-        print("Getting all clients")
+        # Check for null or invalid values
+        if org_id is None or org_id == "None":
+            print("Warning: org_id is None or invalid")
+            return None
+            
+        if org_client_id is None or org_client_id == "None":
+            print("Warning: org_client_id is None or invalid")
+            return None
+            
+        
+        # Build the query
         query = supabase.table("clients").select("id").eq("org_id", org_id).eq("org_client_id", org_client_id)
+        
+        # Add expert_id condition based on memory_type
         if memory_type == "client":
             query = query.is_("expert_id", "null")
-        else:
+        elif expert_id is not None and expert_id != "None":
             query = query.eq("expert_id", expert_id)
+
+        print(f"Getting client with org_id: {org_id}, org_client_id: {org_client_id}", "expert_id: ", expert_id)
+            
+        # Execute the query
         result = query.execute()
         print(f"Found {len(result.data)} clients")
-        if result.data:
+        
+        if result.data and len(result.data) > 0:
             return result.data[0].get("id")
         return None
     except Exception as e:
         print(f"Error getting clients: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        # Return None instead of raising an exception to make the function more robust
+        return None
 
 async def get_expert_id(org_id: UUID, domain_name: str, expert_name: str):
     """
-    Get all clients
+    Get expert ID by org_id, domain_name, and expert_name
     """
     try:
-        print("Getting all clients")
-        query = supabase.table("experts").select("id").eq("org_id", org_id).eq("domain_name", domain_name).eq("expert_name", expert_name)
+        # Check for null or invalid values
+        if org_id is None or org_id == "None":
+            print("Warning: org_id is None or invalid in get_expert_id")
+            return None
+            
+        if not domain_name or domain_name == "None":
+            print("Warning: domain_name is None or empty in get_expert_id")
+            return None
+            
+        if not expert_name or expert_name == "None":
+            print("Warning: expert_name is None or empty in get_expert_id")
+            return None
+            
+        print(f"Getting expert with org_id: {org_id}, domain_name: {domain_name}, expert_name: {expert_name}")
+        
+        # Build and execute the query
+        # For domains, we need to check if the domain_name is contained in the domains array
+        query = supabase.table("experts").select("id").eq("org_id", org_id).contains("domains", [domain_name]).eq("name", expert_name)
         result = query.execute()
-        print(f"Found {len(result.data)} clients")
-        if result.data:
+        print(f"Found {len(result.data)} experts")
+        
+        if result.data and len(result.data) > 0:
             return result.data[0].get("id")
         return None
     except Exception as e:
-        print(f"Error getting clients: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        print(f"Error getting expert ID: {str(e)}")
+        # Return None instead of raising an exception to make the function more robust
+        return None
 
 @router.get("/clients", response_model=List[dict])
 async def get_clients(org_id: UUID, expert_id: UUID = None):
