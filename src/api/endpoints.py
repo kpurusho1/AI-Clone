@@ -4,6 +4,7 @@ from typing import List, Optional, Dict, Any
 import json
 import os
 import shutil
+import random
 import copy
 from uuid import UUID
 from database import supabase
@@ -524,8 +525,17 @@ async def initialize_1hat_patient(request: PatientCreate):
             pdf_documents={},
             other_doc={}
         )
-        org_result = await initialize_org_memory(inputs)
-        org_id = org_result.get("org_id")
+        try:
+            org_result = await initialize_org_memory(inputs)
+            if not org_result or "org_id" not in org_result:
+                print(f"Error: initialize_org_memory returned invalid result: {org_result}")
+                raise ValueError(f"Failed to initialize organization: invalid result")
+                
+            org_id = org_result.get("org_id")
+            print(f"Successfully initialized org with ID: {org_id}")
+        except Exception as e:
+            print(f"Error in initialize_org_memory: {str(e)}")
+            raise ValueError(f"Failed to initialize organization: {str(e)}")
 
         print("Initializing domain")
         inputs = DomainBatchCreate(
@@ -552,6 +562,9 @@ async def initialize_1hat_patient(request: PatientCreate):
         )
         expert_result = await initialize_expert_memory(inputs)
         expert_id = expert_result.get("expert_id")
+        json_file_name = "File"+str(random.randint(1, 100))
+        other_doc = {}
+        other_doc[json_file_name] = request.client_data_jsonb
 
         print("Initializing client")
         inputs = InitializeMyClientMemoryRequest(
@@ -562,7 +575,7 @@ async def initialize_1hat_patient(request: PatientCreate):
             client_data_jsonb=request.client_data_jsonb,
             document_urls={},
             pdf_documents={},
-            other_doc={}
+            other_doc=other_doc
         )
         client_result = await initialize_client_memory(inputs)
         client_id = client_result.get("org_client_id")
@@ -787,7 +800,7 @@ async def upload_pdf_file(file: UploadFile = File(...), pdf_name: str = Form(...
         raise HTTPException(status_code=500, detail=f"Failed to upload PDF: {str(e)}")
 
 @router.post("/parse-json-string")
-async def parse_json_string(json_string: str = Form(...)) -> dict:
+async def parse_json_string(json_string: str) -> dict:
     try:
         # The content is a JSON string that needs to be parsed
         json_str = json_string.strip()
@@ -979,35 +992,51 @@ async def create_update_org(request: OrgCreate):
         org_name = request.org_name
         if (request.org_data_jsonb):
             org_data_jsonb = request.org_data_jsonb
-        
+        print("Checking if org exist ", org_name)
         # Check if org already exists
         org_check = supabase.table("organizations").select("*").eq("org_name", org_name).execute()
         
-        if len(org_check.data) > 0 and org_data_jsonb:
-            # Update existing org using history-preserving merge
+        if len(org_check.data) > 0:
+            # Organization already exists
+            print("Updating existing org", org_name)
+            existing_org_id = org_check.data[0]["id"]
             existing_org_data_jsonb = org_check.data[0]["org_data_jsonb"]
             
-            # Apply history-preserving merge
-            merged_data = history_preserving_merge(existing_org_data_jsonb, org_data_jsonb)
-            
-            # Convert to string for storage
-            org_data_str = json.dumps(merged_data)
-            
-            update_result = supabase.table("organizations").update({
-                "org_data": org_data_str,
-                "org_data_jsonb": merged_data
-                # Let the database handle the updated_at timestamp automatically
-            }).eq("org_name", org_name).execute()
-            
-            return {
-                "status": "success",
-                "message": f"Organization '{org_name}' updated successfully with history preservation",
-                "org_id": update_result.data[0]["id"],
-                "org_data": update_result.data[0]["org_data_jsonb"]
-            }
+            # If we have new data to merge
+            if org_data_jsonb:
+                # Apply history-preserving merge
+                if existing_org_data_jsonb:
+                    merged_data = history_preserving_merge(existing_org_data_jsonb, org_data_jsonb)
+                else:
+                    merged_data = org_data_jsonb
+                
+                # Convert to string for storage
+                org_data_str = json.dumps(merged_data)
+                
+                update_result = supabase.table("organizations").update({
+                    "org_data": org_data_str,
+                    "org_data_jsonb": merged_data
+                    # Let the database handle the updated_at timestamp automatically
+                }).eq("org_name", org_name).execute()
+                
+                return {
+                    "status": "success",
+                    "message": f"Organization '{org_name}' updated successfully with history preservation",
+                    "org_id": update_result.data[0]["id"],
+                    "org_data": update_result.data[0]["org_data_jsonb"]
+                }
+            else:
+                # Just return the existing org data without updating
+                return {
+                    "status": "success",
+                    "message": f"Organization '{org_name}' already exists",
+                    "org_id": existing_org_id,
+                    "org_data": existing_org_data_jsonb
+                }
         else:
             # Create new org
             # Initialize with history if it's a new org
+            print("Creating new org ", org_name)
             if org_data_jsonb:
                 # Add initial history entry
                 timestamp = datetime.now().isoformat()
