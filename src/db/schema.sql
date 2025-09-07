@@ -29,7 +29,8 @@ CREATE TABLE IF NOT EXISTS experts (
     CONSTRAINT fk_org
         FOREIGN KEY (org_id)
         REFERENCES organizations (id)
-        ON DELETE SET NULL
+        ON DELETE SET NULL,
+    CONSTRAINT unique_expert_org UNIQUE (name, org_id)
 );
 
 -- Create Documents table
@@ -37,9 +38,9 @@ CREATE TABLE IF NOT EXISTS documents (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     name TEXT NOT NULL,
     document_link TEXT NOT NULL,
-    owner_id UUID NOT NULL,
+    owner_id TEXT NOT NULL,
     openai_file_id TEXT,
-    storage_path TEXT
+    doc_type TEXT DEFAULT 'link'
 );
 
 -- Create clients table

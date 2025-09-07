@@ -266,13 +266,9 @@ def create_expert(expert_name, domain_name, qa_pairs, document_urls, org_id, pdf
     try:
         print(f"[UI DEBUG] create_expert: Creating expert '{expert_name}' in domain '{domain_name}'")
         
-        # Generate a new UUID for the expert
-        import uuid
-        expert_id = str(uuid.uuid4())
         
         request_data = {
             "org_id": org_id,
-            "expert_id": expert_id,
             "expert_name": expert_name,
             "domain_name": domain_name,
             "qa_pairs": qa_pairs,

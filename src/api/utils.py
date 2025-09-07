@@ -130,7 +130,7 @@ async def create_vector_store(client, vector_name: str):
         print(f"Error creating vector store: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error creating vector store: {str(e)}")
 
-async def create_file_for_vector_store(client, document_url: str, document_name: str = None, owner_id: UUID = None) -> str:
+async def create_file_for_vector_store(client, document_url: str, document_name: str = None, owner_id: str = None) -> str:
     """
     Create a file from a document URL and return the file ID
     
@@ -378,8 +378,7 @@ async def create_file_for_vector_store(client, document_url: str, document_name:
                     "openai_file_id": result.id
                 }
                 if owner_id:
-                    # Convert UUID to string to avoid serialization issues
-                    doc_record["owner_id"] = str(owner_id)
+                    doc_record["owner_id"] = owner_id
                 
                 print(f"[API DEBUG] create_file_for_vector_store: Inserting document record: {doc_record}")
                 # Insert the complete record
@@ -403,7 +402,7 @@ async def create_file_for_vector_store(client, document_url: str, document_name:
         print(f"[API ERROR] create_file_for_vector_store: Document name: {document_name}, Owner ID: {owner_id}")
         raise HTTPException(status_code=500, detail=f"Error creating file: {str(e)}")
 
-async def create_file_from_json(client, file_content_json: Any, file_name: str, owner_id: UUID = None) -> str:
+async def create_file_from_json(client, file_content_json: Any, file_name: str, owner_id: str = None) -> str:
     """
     Create a file from bytes content, store it in Supabase storage, and return the file ID
     
@@ -452,11 +451,11 @@ async def create_file_from_json(client, file_content_json: Any, file_name: str, 
             doc_record = {
                 "name": storage_file_name,
                 "document_link": json.dumps(file_content_json),  # Use Supabase URL if available
-                "openai_file_id": result.id
+                "openai_file_id": result.id,
+                "doc_type": "json"
             }
             if owner_id:
-                # Convert UUID to string to avoid serialization issues
-                doc_record["owner_id"] = str(owner_id)
+                doc_record["owner_id"] = owner_id
 
             # Insert the complete record
             supabase.table("documents").insert(doc_record).execute()
@@ -470,7 +469,7 @@ async def create_file_from_json(client, file_content_json: Any, file_name: str, 
         print(f"Error type: {type(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
-async def create_files_for_vector_store(client, document_urls: dict, other_docs: dict = None, owner_id: UUID = None) -> list:
+async def create_files_for_vector_store(client, document_urls: dict, other_docs: dict = None, owner_id: str = None) -> list:
     """
     Create multiple files from document URLs and/or PDF document bytes and return the file IDs
     
@@ -545,7 +544,7 @@ async def create_files_for_vector_store(client, document_urls: dict, other_docs:
     # Return both successful file IDs and error information
     return file_ids
 
-async def add_documents_to_vector_store(client, vector_store_id: str, document_urls: dict = None, other_doc: dict = None, owner_id: UUID = None):
+async def add_documents_to_vector_store(client, vector_store_id: str, document_urls: dict = None, other_doc: dict = None, owner_id: str = None):
     """
     Process multiple documents and add them to a vector store using batch API
     
@@ -686,7 +685,7 @@ async def add_batch_to_vector_store(client, vector_store_id: str, document_ids: 
         print(f"Error adding batch to vector store: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error adding batch to vector store: {str(e)}")
         
-async def edit_vector_store(client, vector_store_id: str, file_ids: list, document_urls: dict, other_doc: dict = None, owner_id: UUID = None):
+async def edit_vector_store(client, vector_store_id: str, file_ids: list, document_urls: dict, other_doc: dict = None, owner_id: str = None):
     """
     Edit an existing vector store by adding new documents and/or removing deselected documents
     
@@ -707,6 +706,7 @@ async def edit_vector_store(client, vector_store_id: str, file_ids: list, docume
         
         # Initialize other_documents if not provided
         if other_doc is None:
+            print("[EDIT VECTOR] No json content provided to edit vector")
             other_doc = {}
             
         url_count = len(document_urls) if document_urls else 0
@@ -717,7 +717,7 @@ async def edit_vector_store(client, vector_store_id: str, file_ids: list, docume
         
         # Get existing document URLs from the documents table that match the file_ids
         print(f"[API DEBUG] edit_vector_store: Querying existing documents for file_ids: {file_ids}")
-        query = supabase.table("documents").select("id, document_link, openai_file_id").in_("openai_file_id", file_ids)
+        query = supabase.table("documents").select("id, document_link, openai_file_id").in_("openai_file_id", file_ids).neq("doc_type", "json").eq("owner_id", owner_id)
         existing_docs_query = query.execute()
         existing_docs = existing_docs_query.data
         print(f"[API DEBUG] edit_vector_store: Found {len(existing_docs)} existing documents")
@@ -792,10 +792,11 @@ async def edit_vector_store(client, vector_store_id: str, file_ids: list, docume
             print(f"[API DEBUG] edit_vector_store: Deleting {len(files_to_delete)} files that are no longer needed")
             try:
                 # First, get the documents to delete to check for storage paths
-                docs_to_delete = supabase.table("documents").select("*").in_("openai_file_id", files_to_delete).execute()
+                docs_to_delete = supabase.table("documents").select("*").in_("openai_file_id", files_to_delete).eq("owner_id", owner_id).execute()
                 print(f"[API DEBUG] edit_vector_store: Found {len(docs_to_delete.data)} documents to delete in database")
                 
                 # Delete files from Supabase storage if they have a storage path
+                '''
                 for doc in docs_to_delete.data:
                     storage_path = doc.get("storage_path")
                     if storage_path:
@@ -806,9 +807,9 @@ async def edit_vector_store(client, vector_store_id: str, file_ids: list, docume
                         except Exception as storage_error:
                             print(f"[API ERROR] edit_vector_store: Error deleting file from storage: {storage_path}, Error: {str(storage_error)}")
                             # Continue with deletion process even if storage deletion fails
-                
+                '''
                 # Delete from documents table where openai_file_id is in files_to_delete
-                delete_result = supabase.table("documents").delete().in_("openai_file_id", files_to_delete).execute()
+                delete_result = supabase.table("documents").delete().in_("openai_file_id", files_to_delete).eq("owner_id", owner_id).execute()
                 
                 print(f"[API DEBUG] edit_vector_store: Deleted {len(delete_result.data)} documents from the database")
                 
@@ -1401,6 +1402,7 @@ async def create_assistant(org_id: UUID, domain_name: str = None, expert_id: UUI
     """
     try:
         print(f"[DEBUG] create_assistant: Creating assistant for org '{org_id}', domain '{domain_name}', expert '{expert_id}', client '{client_id}' with memory type '{memory_type}'")
+        
         request = CreateVector(org_id=org_id, domain_name=domain_name, expert_id=expert_id, client_id=client_id, memory_type=memory_type)
         query, vector_name = await get_query_for_vector_store(request)
         vector_store_result = query.execute()
