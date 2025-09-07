@@ -9,10 +9,10 @@ class PatientCreate(BaseModel):
     client_name: str
     org_client_id: int
     client_data_jsonb: Dict[str, Any]
-    org_data_jsonb: Dict[str, Any]
-    document_urls: Dict[str, str]
-    pdf_documents: Dict[str, str]
-    other_doc: Dict[str, Any]
+    org_data_jsonb: Dict[str, Any] = {}
+    document_urls: Dict[str, str] = {}
+    pdf_documents: Dict[str, str] = {}
+    other_doc: Dict[str, Any] = {}
 
 class ClientCreate(BaseModel):
     org_client_id: int
