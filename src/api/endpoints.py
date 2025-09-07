@@ -543,7 +543,7 @@ async def initialize_1hat_patient(request: PatientCreate):
         print("Initializing expert")
         inputs = InitializeExpertMemoryRequest(
             org_id=org_id,
-            domain_name = request.domain_name,
+            domain_name = [request.domain_name],
             expert_name=request.expert_name,
             qa_pairs=[],
             document_urls={},
