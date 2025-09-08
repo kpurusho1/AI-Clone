@@ -10,7 +10,7 @@ from uuid import UUID
 from database import supabase
 from models import (
     Expert, ExpertUpdate,
-    QueryRequest, 
+    QueryRequest, JsonStringRequest,
     DeleteVectorRequest, DomainBatchCreate,
     DomainCreate, DomainFilesRequest,
     FilesConfigRequest, PersonaGenerationRequest,
@@ -34,7 +34,7 @@ from utils import (
     parse_domain_config_file,
     update_expert_with_domains,
     update_domains_with_experts,
-    check_document_urls
+    check_document_urls, get_file_ids
 )
 
 router = APIRouter()
@@ -374,16 +374,22 @@ async def initialize_client_memory(request: InitializeMyClientMemoryRequest):
             raise ValueError("org_client_id is required")
         if not request.client_data_jsonb:
             raise ValueError("client_data_jsonb is required")
+        if not request.consultation_id:
+            raise ValueError("consultation_id is required")
+        if not request.created_time:
+            raise ValueError("created_time is required")
             
-
         # Step 1: Create client if client doesn't exist
         print("Step 1: Creating client if client doesn't exist")
+        
         client_request = ClientCreate(
             org_client_id=request.org_client_id, 
             org_id=request.org_id, 
             expert_id=request.expert_id, 
             client_name=request.client_name, 
-            client_data_jsonb=request.client_data_jsonb if request.client_data_jsonb else {}
+            client_data_jsonb=request.client_data_jsonb,
+            consultation_id=request.consultation_id,
+            created_time=request.created_time if request.created_time else "",
         )
         client_result = await create_update_client(client_request)
         
@@ -433,15 +439,12 @@ async def initialize_client_memory(request: InitializeMyClientMemoryRequest):
         if not expert_client_vector_id:
             raise ValueError("Expert client vector store creation succeeded but returned invalid vector ID")
        
-        # Create a filename with date_time, expert_name and client_name
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        
         # Prepare expert client document
-        expert_client_doc_name = f"{timestamp}_{request.expert_id}_{expert_client_id}"
+        expert_client_doc_name = f"{request.consultation_id}_{request.expert_id}_{expert_client_id}"
         expert_client_doc = {expert_client_doc_name: expert_client_data}   
 
         # Prepare overall client document
-        overall_doc_name = f"{timestamp}_{request.org_id}_{overall_client_id}"
+        overall_doc_name = f"{request.consultation_id}_{request.org_id}_{overall_client_id}"
         overall_doc = {overall_doc_name: overall_client_data}
 
         # Step 3: Add files to overall client vector store
@@ -516,6 +519,10 @@ async def initialize_1hat_patient(request: PatientCreate):
             raise ValueError("1hat patient ID is required")
         if not request.client_data_jsonb:
             raise ValueError("Patient Data is required")
+        if not request.consultation_id:
+            raise ValueError("Patient Consultation ID is required")
+        if not request.created_time:
+            raise ValueError("Record Created Time is required")
             
         print("Initializing org")
         inputs = InitializeOrgMemoryRequest(
@@ -562,9 +569,11 @@ async def initialize_1hat_patient(request: PatientCreate):
         )
         expert_result = await initialize_expert_memory(inputs)
         expert_id = expert_result.get("expert_id")
-        json_file_name = "File"+str(random.randint(1, 100))
-        other_doc = {}
-        other_doc[json_file_name] = request.client_data_jsonb
+
+        client_data_raw=request.client_data_jsonb if request.client_data_jsonb else "{}"
+        # Create a JsonStringRequest object to pass to parse_json_string
+        json_request = JsonStringRequest(json_string=client_data_raw)
+        client_data_jsonb=await parse_json_string(json_request)
 
         print("Initializing client")
         inputs = InitializeMyClientMemoryRequest(
@@ -572,10 +581,12 @@ async def initialize_1hat_patient(request: PatientCreate):
             expert_id=expert_id,
             org_client_id=request.org_client_id,
             client_name=request.client_name,
-            client_data_jsonb=request.client_data_jsonb,
+            client_data_jsonb=client_data_jsonb,
+            consultation_id=request.consultation_id,
+            created_time=request.created_time if request.created_time else "",
             document_urls={},
             pdf_documents={},
-            other_doc=other_doc
+            other_doc={},
         )
         client_result = await initialize_client_memory(inputs)
         client_id = client_result.get("org_client_id")
@@ -804,18 +815,20 @@ async def upload_pdf_file(file: UploadFile = File(...), pdf_name: str = Form(...
         raise HTTPException(status_code=500, detail=f"Failed to upload PDF: {str(e)}")
 
 @router.post("/parse-json-string")
-async def parse_json_string(json_string: str) -> dict:
+async def parse_json_string(request: JsonStringRequest) -> dict:
     try:
         # The content is a JSON string that needs to be parsed
-        json_str = json_string.strip()
+        json_str = request.json_string.strip()
                         
         # Parse the JSON string - it's a string containing escaped JSON
         if json_str.startswith('"') and json_str.endswith('"'):
             # This is a JSON string containing escaped JSON
             # First, parse the outer JSON string
             json_content = json.loads(json_str)
+            print(f"JSON content: {json_content}")
             # Then parse the inner JSON content
             sample_json = json.loads(json_content)
+            print(f"Sample JSON: {sample_json}")
         else:
             # Try to parse as a regular JSON object
             brace_count = 0
@@ -833,6 +846,7 @@ async def parse_json_string(json_string: str) -> dict:
             if end_pos > 0:
                 first_json = json_str[:end_pos]
                 sample_json = json.loads(first_json)
+                print(f"Sample JSON in not string: {sample_json}")
             else:
                 sample_json = {}
                         
@@ -879,61 +893,69 @@ async def parse_json_string(request: Dict[str, Any]) -> dict:
 #________Helper functions (potential APIs)________
 
 # Org creation function
-def history_preserving_merge(existing_data: Dict[str, Any], new_data: Dict[str, Any]) -> Dict[str, Any]:
+def history_preserving_merge(existing_data: Dict[str, Any], new_data: Dict[str, Any], new_consultation_id:str, new_created_time:str) -> Dict[str, Any]:
     """
-    Append new JSON data to history without replacing existing data.
-    This function:
-    1. Initializes a _history array if it doesn't exist
-    2. Adds a timestamped snapshot of both existing state and new data to the history
-    3. Returns the combined data structure with complete history preserved
-    
-    Args:
-        existing_data: The existing JSON data structure
-        new_data: The new JSON data to append
-        
-    Returns:
-        The combined data structure with history preserved
+    Preserve full history of updates.
+    - `_history` grows indefinitely, storing past states.
+    - Latest record also gets its own timestamp.
     """
-    # Create result structure
     result = {}
     
-    # Initialize history if it doesn't exist
-    if "_history" not in result:
-        result["_history"] = []
-    
-    # Add timestamp for this update
-    timestamp = datetime.now().isoformat()
-    
-    # If existing data has history, copy it to result
-    if "_history" in existing_data:
-        result["_history"] = copy.deepcopy(existing_data["_history"])
-    
-    # Store existing data as a snapshot if it's not empty (excluding _history)
-    existing_data_copy = copy.deepcopy(existing_data)
-    if "_history" in existing_data_copy:
-        del existing_data_copy["_history"]
-    
-    if existing_data_copy:  # Only add if there's actual data besides _history
-        result["_history"].append({
-            "timestamp": timestamp,
-            "data": existing_data_copy
-        })
-    
-    # Store new data as the latest snapshot
-    result["_history"].append({
-        "timestamp": timestamp,
-        "data": copy.deepcopy(new_data)
-    })
-    
-    # Copy all non-history fields from existing data
-    for key, value in existing_data.items():
-        if key != "_history":
+    #check always if this is an update to existing consultation id in existing_data
+    if existing_data['consultation_id']==new_consultation_id:
+        #old_state.update(copy.deepcopy(new_data))
+        for key, value in new_data.items():
             result[key] = copy.deepcopy(value)
+        result['consultation_id']=new_consultation_id
+        result['created_time']=new_created_time
+        # Carry forward history if exists, else start fresh
+        result["_history"] = copy.deepcopy(existing_data.get("_history", []))
+        return result
+    elif "_history" in existing_data:
+        for i, item in enumerate(existing_data['_history']): # as existing_data['_history'] is a list
+            if item['consultation_id']==new_consultation_id:
+                # Carry forward history if exists, else start fresh
+                result = copy.deepcopy(existing_data)
+                
+                if result['_history'][i]['consultation_id']==new_consultation_id:
+                    result['_history'][i]['data'].update(copy.deepcopy(new_data))
+                    print("Updated existing consultation id in history")
+                else:
+                    print("Error: Consultation ID does not match between existing and new history to update")
+                
+                return result
     
-    # Add all fields from new data (this will overwrite existing fields)
+    # Carry forward history if exists, else start fresh
+    result["_history"] = copy.deepcopy(existing_data.get("_history", []))
+    #if not, then this is a new consultation id that needs to be appended
+    created_time = None
+    consultation_id = None
+    
+    # Add snapshot of old state to history (excluding its _history) and placing consultation id and created time at top of dictionary
+    old_state = copy.deepcopy(existing_data)
+    if "_history" in old_state:
+        del old_state["_history"]
+    if "created_time" in old_state:
+        created_time = old_state["created_time"]
+        del old_state["created_time"]
+    if "consultation_id" in old_state:
+        consultation_id = old_state["consultation_id"]
+        del old_state["consultation_id"]
+
+    if old_state:
+        result["_history"].append({
+            "created_time": created_time,
+            "consultation_id": consultation_id,
+            "data": old_state
+        })
+
+    # Add new data as latest record with timestamp
+    # result.update(copy.deepcopy(new_data)) -> Same result as below and much more efficient but less understandable
     for key, value in new_data.items():
         result[key] = copy.deepcopy(value)
-    
+    result["created_time"] = new_created_time
+    result["consultation_id"] = new_consultation_id
+
     return result
 
 def deep_merge(existing_data: Dict[str, Any], new_data: Dict[str, Any]) -> Dict[str, Any]:
@@ -1085,6 +1107,8 @@ async def create_update_client(request: ClientCreate):
         # Initialize variables
         client_name = request.client_name
         org_client_id = request.org_client_id
+        consultation_id = request.consultation_id
+        created_time = request.created_time
         org_id = request.org_id
         expert_id = request.expert_id
         client_data_jsonb = None
@@ -1092,6 +1116,7 @@ async def create_update_client(request: ClientCreate):
         if (request.client_data_jsonb):
             client_data_jsonb = request.client_data_jsonb
             client_data_str = json.dumps(client_data_jsonb)
+            print("Data received to update / append: ", client_data_jsonb)
         
         overall_result_client_data = None
         overall_result_client_id = None
@@ -1103,10 +1128,13 @@ async def create_update_client(request: ClientCreate):
            # Check if client exists for that expert
         client_expert_check = supabase.table("clients").select("*").eq("client_name", client_name).eq("org_client_id", org_client_id).eq("org_id", org_id).eq("expert_id", expert_id).execute()
         
-        if client_check and len(client_check.data) > 0 and client_data_jsonb:
+        if client_check and len(client_check.data) > 0:
             # Get existing client data and update it with new data
+            print("Client exists for that org")
             existing_client_data_jsonb = client_check.data[0]["client_data_jsonb"]
-            merged_data = history_preserving_merge(existing_client_data_jsonb, client_data_jsonb)
+            merged_data = existing_client_data_jsonb
+            if client_data_jsonb:
+                merged_data = history_preserving_merge(existing_client_data_jsonb, client_data_jsonb, consultation_id, created_time)
             # Update existing client
             update_result = supabase.table("clients").update({
                 "client_data_jsonb": merged_data
@@ -1129,10 +1157,13 @@ async def create_update_client(request: ClientCreate):
             overall_result_client_data = insert_result.data[0]["client_data_jsonb"]
             overall_result_client_id = insert_result.data[0]["id"]
         
-        if client_expert_check and len(client_expert_check.data) > 0 and client_data_jsonb:
+        if client_expert_check and len(client_expert_check.data) > 0:
             # Get existing client data and update it with new data
+            print("Updating existing expert client")
             existing_expert_client_data_jsonb = client_expert_check.data[0]["client_data_jsonb"]
-            merged_data = history_preserving_merge(existing_expert_client_data_jsonb, client_data_jsonb)
+            merged_data = existing_expert_client_data_jsonb
+            if client_data_jsonb:
+                merged_data = history_preserving_merge(existing_expert_client_data_jsonb, client_data_jsonb, consultation_id, created_time)
             # Update existing client
             update_result = supabase.table("clients").update({
                 "client_data_jsonb": merged_data
@@ -1293,7 +1324,7 @@ async def create_or_get_expert(expert: Expert):
         expert_exists = supabase.table("experts").select("*").eq("name", expert.name).eq("org_id", expert.org_id).execute()
         if expert_exists.data:
             print(f"Expert already exists: {expert_exists.data}. Update expert to modify")
-            expert_id = update_expert_with_domains(expert_exists.data[0], expert.domains)
+            expert_id = await update_expert_with_domains(expert_exists.data[0], expert.domains)
         else:
             # Create expert data
             expert_data = {
@@ -1794,38 +1825,6 @@ async def get_documents_by_file_ids(file_ids: Optional[List[str]] = None):
         print(f"Error getting documents: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
-async def get_file_ids(vectorname: Optional[str] = None):
-    """
-    Get file_ids filtered by vector_name
-    
-    Priority rules:
-    1. If vector_name is provided, return file_ids matching vector_name, else return all file_ids
-    """
-    try:
-        
-        # Start building the query
-        query = supabase.table("vector_stores").select("*")
-        
-        if vectorname:
-            query = query.eq("vector_name", vectorname)
-            
-        # Execute the query
-        result = query.execute()
-        
-        # Check if result.data is a coroutine and await it if necessary
-        if hasattr(result, 'data'):
-            data = result.data
-            #print(f"Found {len(data)} vector stores")
-            if data and len(data) > 0:
-                return data[0].get("file_ids", [])
-            return []
-        else:
-            print("No data attribute found in result")
-            return []
-    except Exception as e:
-        print(f"Error getting documents: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
 async def get_org_id(org_name: str):
     """
     Get organization ID by name
@@ -1848,7 +1847,6 @@ async def get_org_id(org_name: str):
     except Exception as e:
         print(f"Error getting organization ID: {str(e)}")
         return None
-
 
 @router.get("/organization", response_model=List[dict])
 async def get_organization():

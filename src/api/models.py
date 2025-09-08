@@ -1,6 +1,7 @@
 from typing import Dict, Optional, Any, List
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from uuid import UUID
+from datetime import datetime
 
 class PatientCreate(BaseModel):
     org_name: str
@@ -8,7 +9,9 @@ class PatientCreate(BaseModel):
     expert_name: str
     client_name: str
     org_client_id: int
-    client_data_jsonb: Dict[str, Any]
+    client_data_jsonb: str
+    consultation_id: str
+    created_time: str = Field(..., description="Timestamp with timezone in ISO 8601 format (e.g., '2025-09-07T13:27:42.809634+00:00')")
     org_data_jsonb: Dict[str, Any] = {}
     document_urls: Dict[str, str] = {}
     pdf_documents: Dict[str, str] = {}
@@ -21,6 +24,8 @@ class ClientCreate(BaseModel):
     client_id: Optional[UUID] = None
     client_name: str
     client_data_jsonb: Dict[str, Any]  # JSON data for the client
+    consultation_id: str
+    created_time: str = Field(..., description="Timestamp with timezone in ISO 8601 format (e.g., '2025-09-07T13:27:42.809634+00:00')")
 
 class CreateVector(BaseModel):
     memory_type: str = "expert"  # Options: "llm", "organization", "domain", "expert", "client", "myclient"
@@ -97,6 +102,9 @@ class InitializeOrgMemoryRequest(OrgCreate):
     document_urls: Dict[str, str] = {}  # Dictionary of document name to URL mappings
     pdf_documents: Dict[str, str] = {}  # Dictionary of document name to file_path
     other_doc: Dict[str, Any] = {}  # Dictionary of document name to file_path
+
+class JsonStringRequest(BaseModel):
+    json_string: str
 
 class PersonaGenerationRequest(BaseModel):
     qa_pairs: list  # List of dictionaries with question and answer pairs
