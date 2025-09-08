@@ -16,6 +16,7 @@ from llama_cloud_services import LlamaParse
 from youtube_transcript_api import YouTubeTranscriptApi
 from config import OPENAI_API_KEY, LLAMAPARSE_API_KEY, DOMAIN_FILE_PATH
 from database import supabase
+from llama_index.readers.youtube_transcript.utils import is_youtube_video
 from models import CreateVector
 from fastapi import HTTPException
 
@@ -26,22 +27,6 @@ accepted_extensions = ['.c', '.cpp', '.css', '.csv', '.doc', '.docx', '.gif', '.
 
 # Initialize OpenAI client
 client = OpenAI(api_key=OPENAI_API_KEY)
-
-def is_youtube_video(url: str) -> bool:
-    """Check if a URL is a YouTube video."""
-    import re
-    youtube_patterns = [
-        r'(?:youtube\.com\/watch\?v=|youtu\.be\/)([\w-]+)',
-        r'youtube\.com\/embed\/([\w-]+)',
-        r'youtube\.com\/v\/([\w-]+)',
-        r'youtube\.com\/user\/[\w-]+\/\?v=([\w-]+)',
-        r'youtube\.com\/attribution_link\?.*v%3D([\w-]+)',
-    ]
-    
-    for pattern in youtube_patterns:
-        if re.search(pattern, url):
-            return True
-    return False
 
 def get_openai_client():
     """
