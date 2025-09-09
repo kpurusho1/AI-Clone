@@ -12,7 +12,6 @@ class PatientCreate(BaseModel):
     client_data_jsonb: str
     consultation_id: str
     created_time: str = Field(..., description="Timestamp with timezone in ISO 8601 format (e.g., '2025-09-07T13:27:42.809634+00:00')")
-    org_data_jsonb: Dict[str, Any] = {}
     document_urls: Dict[str, str] = {}
     pdf_documents: Dict[str, str] = {}
     other_doc: Dict[str, Any] = {}
@@ -69,7 +68,6 @@ class ExpertUpdate(BaseModel):
 
 class OrgCreate(BaseModel):
     org_name: str
-    org_data_jsonb: Dict[str, Any] = {} # JSON data for the client
     
 class FilesConfigRequest(BaseModel):
     memory_type: str = "expert"  # Options: "llm", "organization", "domain", "expert", "client", "myclient"
@@ -101,7 +99,6 @@ class InitializeMyClientMemoryRequest(ClientCreate):
 class InitializeOrgMemoryRequest(OrgCreate):
     document_urls: Dict[str, str] = {}  # Dictionary of document name to URL mappings
     pdf_documents: Dict[str, str] = {}  # Dictionary of document name to file_path
-    other_doc: Dict[str, Any] = {}  # Dictionary of document name to file_path
 
 class JsonStringRequest(BaseModel):
     json_string: str

@@ -49,25 +49,15 @@ async def initialize_org_memory(request: InitializeOrgMemoryRequest):
     """
     try:
         print(f"Initializing memory for client: {request.org_name}")
-        results = {}
-        org_doc = {}
-        org_data_jsonb = request.org_data_jsonb if request.org_data_jsonb else {}
 
         # Step 1: Create org if org doesn't exist
         print("Step 1: Creating org if org doesn't exist")
-        org_request = OrgCreate(org_name=request.org_name, org_data_jsonb=org_data_jsonb)
+        org_request = OrgCreate(org_name=request.org_name)
         org_result = await create_update_org(org_request)
         org_id = org_result["org_id"]
-        org_data = org_result["org_data"]
     
         # Create a filename with date_time, expert_name and client_name
-        if org_data:
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            org_doc_name = f"{timestamp}_{org_id}"
-            
-            org_doc[org_doc_name] = org_data
-
-        if (request.document_urls or request.pdf_documents or org_doc):
+        if (request.document_urls or request.pdf_documents):
             # Step 2: Create org vector store if it doesn't exist
             print("Step 2: Create org vector store if it doesn't exist")
             org_vs_request = CreateVector(memory_type = 'organization', org_id=org_id)
@@ -82,7 +72,6 @@ async def initialize_org_memory(request: InitializeOrgMemoryRequest):
                 org_id=org_id,
                 document_urls=request.document_urls,
                 pdf_documents=request.pdf_documents,
-                other_doc = org_doc
             )
             await add_files_to_vector(org_request)
         
@@ -267,8 +256,9 @@ async def initialize_expert_memory(request: InitializeExpertMemoryRequest):
         '''
 
         # Step 1: Generate persona from QA data
-        print("Step 1: Generating persona from QA data")
+        
         if request.qa_pairs:
+            print("Step 1: Generating persona from QA data")
             persona_request = PersonaGenerationRequest(qa_pairs=request.qa_pairs)
             persona_result = await generate_persona_from_qa_data(persona_request)
             persona_text = persona_result.get("persona", "")
@@ -277,13 +267,10 @@ async def initialize_expert_memory(request: InitializeExpertMemoryRequest):
         else:
             persona_text = ""
             results["persona"] = ""
-            
-        if not persona_text:
-            print("Warning: Generated persona is empty")
+            print("Warning: Expert persona is empty")
         
         # Step 2: Create expert with generated persona
-        print("Step 2: Creating expert")
-            
+        print("Creating expert")
         expert_request = Expert(
             name=request.expert_name,
             domains=request.domain_name,
@@ -297,13 +284,13 @@ async def initialize_expert_memory(request: InitializeExpertMemoryRequest):
 
         
         # Step 3: Add files to expert vector
-        print("Step 3: Adding files to expert vector")
         # Initialize document collections with empty defaults if not provided
         document_urls = request.document_urls if request.document_urls else {}
         pdf_documents = request.pdf_documents if request.pdf_documents else {}
         other_doc = request.other_doc if request.other_doc else {}
         
         if (document_urls or pdf_documents or other_doc):
+            print("Adding files to expert vector")
             # Create a vector store for the new expert
             vector_id_result = await create_or_get_vector(CreateVector(memory_type="expert", org_id=expert.org_id, expert_id=expert_id))
             vector_id = vector_id_result.get("vector_id") if vector_id_result else None
@@ -527,10 +514,8 @@ async def initialize_1hat_patient(request: PatientCreate):
         print("Initializing org")
         inputs = InitializeOrgMemoryRequest(
             org_name=request.org_name,
-            org_data_jsonb={},
             document_urls={},
-            pdf_documents={},
-            other_doc={}
+            pdf_documents={}
         )
         try:
             org_result = await initialize_org_memory(inputs)
@@ -572,7 +557,9 @@ async def initialize_1hat_patient(request: PatientCreate):
 
         client_data_raw=request.client_data_jsonb if request.client_data_jsonb else "{}"
         # Create a JsonStringRequest object to pass to parse_json_string
+        print(f"[API DEBUG] initialize_1hat_patient: Client data raw: {type(client_data_raw)}")
         json_request = JsonStringRequest(json_string=client_data_raw)
+        print(f"[API DEBUG] initialize_1hat_patient: Json request: {type(json_request)}")
         client_data_jsonb=await parse_json_string(json_request)
 
         print("Initializing client")
@@ -818,10 +805,12 @@ async def upload_pdf_file(file: UploadFile = File(...), pdf_name: str = Form(...
 async def parse_json_string(request: JsonStringRequest) -> dict:
     try:
         # The content is a JSON string that needs to be parsed
+        print(f"[API DEBUG] parse_json_string: Received JSON string: {type(request.json_string)}")
         json_str = request.json_string.strip()
-                        
+        
         # Parse the JSON string - it's a string containing escaped JSON
         if json_str.startswith('"') and json_str.endswith('"'):
+            print(f"[API DEBUG] parse_json_string: JSON string starts and ends with quotes")
             # This is a JSON string containing escaped JSON
             # First, parse the outer JSON string
             json_content = json.loads(json_str)
@@ -831,24 +820,37 @@ async def parse_json_string(request: JsonStringRequest) -> dict:
             print(f"Sample JSON: {sample_json}")
         else:
             # Try to parse as a regular JSON object
-            brace_count = 0
-            end_pos = 0
-            
-            for i, char in enumerate(json_str):
-                if char == '{':
-                    brace_count += 1
-                elif char == '}':
-                    brace_count -= 1
-                if brace_count == 0:
-                    end_pos = i + 1
-                    break
-                            
-            if end_pos > 0:
-                first_json = json_str[:end_pos]
-                sample_json = json.loads(first_json)
-                print(f"Sample JSON in not string: {sample_json}")
-            else:
-                sample_json = {}
+            print(f"[API DEBUG] parse_json_string: JSON string does not start and end with quotes")
+            try:
+                # First try direct JSON parsing
+                sample_json = json.loads(json_str)
+                print(f"Sample JSON parsed directly: {sample_json}")
+            except json.JSONDecodeError:
+                # If that fails, try the brace counting approach
+                print(f"[API DEBUG] parse_json_string: Direct parsing failed, trying brace counting")
+                
+                # Fall back to brace counting
+                brace_count = 0
+                end_pos = 0
+                
+                for i, char in enumerate(json_str):
+                    if char == '{':
+                        brace_count += 1
+                    elif char == '}':
+                        brace_count -= 1
+                    if brace_count == 0 and brace_count > 0:
+                        end_pos = i + 1
+                        break
+                                    
+                if end_pos > 0:
+                    first_json = json_str[:end_pos]
+                    try:
+                        sample_json = json.loads(first_json)
+                        print(f"Sample JSON from brace counting: {sample_json}")
+                    except json.JSONDecodeError:
+                        sample_json = {}
+                else:
+                    sample_json = {}
                         
         if sample_json:
             print("Loaded JSON data successfully")
@@ -902,22 +904,20 @@ def history_preserving_merge(existing_data: Dict[str, Any], new_data: Dict[str, 
     result = {}
     
     #check always if this is an update to existing consultation id in existing_data
-    if existing_data['consultation_id']==new_consultation_id:
+    if "consultation_id" in existing_data and existing_data['consultation_id']==new_consultation_id:
         #old_state.update(copy.deepcopy(new_data))
         for key, value in new_data.items():
             result[key] = copy.deepcopy(value)
-        result['consultation_id']=new_consultation_id
-        result['created_time']=new_created_time
         # Carry forward history if exists, else start fresh
         result["_history"] = copy.deepcopy(existing_data.get("_history", []))
         return result
     elif "_history" in existing_data:
         for i, item in enumerate(existing_data['_history']): # as existing_data['_history'] is a list
-            if item['consultation_id']==new_consultation_id:
+            if "consultation_id" in item and item['consultation_id']==new_consultation_id:
                 # Carry forward history if exists, else start fresh
                 result = copy.deepcopy(existing_data)
                 
-                if result['_history'][i]['consultation_id']==new_consultation_id:
+                if "consultation_id" in result['_history'][i] and result['_history'][i]['consultation_id']==new_consultation_id:
                     result['_history'][i]['data'].update(copy.deepcopy(new_data))
                     print("Updated existing consultation id in history")
                 else:
@@ -953,8 +953,6 @@ def history_preserving_merge(existing_data: Dict[str, Any], new_data: Dict[str, 
     # result.update(copy.deepcopy(new_data)) -> Same result as below and much more efficient but less understandable
     for key, value in new_data.items():
         result[key] = copy.deepcopy(value)
-    result["created_time"] = new_created_time
-    result["consultation_id"] = new_consultation_id
 
     return result
 
@@ -1008,16 +1006,9 @@ async def create_update_org(request: OrgCreate):
     
     Returns:
         org_id: uuid
-        org_name: str
-        org_data_jsonb: dict
-        org_data: dict
     """
     try:
-        org_data_jsonb = None
-        org_data_str = None
         org_name = request.org_name
-        if (request.org_data_jsonb):
-            org_data_jsonb = request.org_data_jsonb
         print("Checking if org exist ", org_name)
         # Check if org already exists
         org_check = supabase.table("organizations").select("*").eq("org_name", org_name).execute()
@@ -1025,66 +1016,24 @@ async def create_update_org(request: OrgCreate):
         if len(org_check.data) > 0:
             # Organization already exists
             print("Updating existing org", org_name)
-            existing_org_id = org_check.data[0]["id"]
-            existing_org_data_jsonb = org_check.data[0]["org_data_jsonb"]
-            
-            # If we have new data to merge
-            if org_data_jsonb:
-                # Apply history-preserving merge
-                if existing_org_data_jsonb:
-                    merged_data = history_preserving_merge(existing_org_data_jsonb, org_data_jsonb)
-                else:
-                    merged_data = org_data_jsonb
-                
-                # Convert to string for storage
-                org_data_str = json.dumps(merged_data)
-                
-                update_result = supabase.table("organizations").update({
-                    "org_data": org_data_str,
-                    "org_data_jsonb": merged_data
-                    # Let the database handle the updated_at timestamp automatically
-                }).eq("org_name", org_name).execute()
-                
-                return {
-                    "status": "success",
-                    "message": f"Organization '{org_name}' updated successfully with history preservation",
-                    "org_id": update_result.data[0]["id"],
-                    "org_data": update_result.data[0]["org_data_jsonb"]
-                }
-            else:
-                # Just return the existing org data without updating
-                return {
-                    "status": "success",
-                    "message": f"Organization '{org_name}' already exists",
-                    "org_id": existing_org_id,
-                    "org_data": existing_org_data_jsonb
-                }
+            # Just return the existing org data without updating
+            return {
+                "status": "success",
+                "message": f"Organization '{org_name}' already exists",
+                "org_id": org_check.data[0]["id"],
+            }
         else:
             # Create new org
             # Initialize with history if it's a new org
             print("Creating new org ", org_name)
-            if org_data_jsonb:
-                # Add initial history entry
-                timestamp = datetime.now().isoformat()
-                if "_history" not in org_data_jsonb:
-                    org_data_jsonb["_history"] = [{
-                        "timestamp": timestamp,
-                        "data": copy.deepcopy(org_data_jsonb)
-                    }]
-                
-                org_data_str = json.dumps(org_data_jsonb)
             
             insert_result = supabase.table("organizations").insert({
                 "org_name": org_name,
-                "org_data": org_data_str,
-                "org_data_jsonb": org_data_jsonb
-            }).execute()
-            
+            }).execute()            
             return {
                 "status": "success",
                 "message": f"Organization '{org_name}' created successfully with history tracking",
                 "org_id": insert_result.data[0]["id"],
-                "org_data": insert_result.data[0]["org_data_jsonb"]
             }
     
     except Exception as e:
@@ -1112,10 +1061,12 @@ async def create_update_client(request: ClientCreate):
         org_id = request.org_id
         expert_id = request.expert_id
         client_data_jsonb = None
-        client_data_str = None
         if (request.client_data_jsonb):
             client_data_jsonb = request.client_data_jsonb
-            client_data_str = json.dumps(client_data_jsonb)
+            if "consultation_id" not in client_data_jsonb:
+                client_data_jsonb["consultation_id"] = consultation_id
+            if "created_time" not in client_data_jsonb:
+                client_data_jsonb["created_time"] = created_time
             print("Data received to update / append: ", client_data_jsonb)
         
         overall_result_client_data = None
@@ -1149,7 +1100,6 @@ async def create_update_client(request: ClientCreate):
                 "org_client_id": org_client_id,
                 "client_name": client_name,
                 "client_data_jsonb": client_data_jsonb,
-                "client_data": client_data_str,
                 "org_id": str(org_id),
                 "expert_id": None
             }).execute()
@@ -1178,7 +1128,6 @@ async def create_update_client(request: ClientCreate):
                 "org_client_id": org_client_id,
                 "client_name": client_name,
                 "client_data_jsonb": client_data_jsonb,
-                "client_data": client_data_str,
                 "org_id": str(org_id),
                 "expert_id": str(expert_id) if expert_id else None
             }).execute()    
