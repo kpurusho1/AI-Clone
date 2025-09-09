@@ -1,10 +1,7 @@
 -- Create organization table
 CREATE TABLE IF NOT EXISTS organizations (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    org_name TEXT NOT NULL UNIQUE,
-    org_location TEXT,
-    org_data TEXT,
-    org_data_jsonb JSONB
+    org_name TEXT NOT NULL UNIQUE
 );
 
 -- Create Domain table with TEXT domain_name instead of enum
@@ -46,8 +43,7 @@ CREATE TABLE IF NOT EXISTS documents (
 -- Create clients table
 CREATE TABLE IF NOT EXISTS clients (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    client_name TEXT NOT NULL,
-    client_data TEXT,
+    client_name TEXT NOT NULL
     org_id UUID,
     expert_id UUID,
     org_client_id int,

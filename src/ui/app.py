@@ -1039,34 +1039,10 @@ elif page == "Create 1hat patient":
                 key="client_json_input"
             )
             # Option to load sample JSON
+         
+            client_data = json_str
+            
         
-    
-            
-            #json_filename = "File"+str(random.randint(1, 100))
-            #sample_json = {}
-            
-            # Validate JSON
-            #valid_json = True
-            #client_data = {}
-            #if json_str:
-            #    try:
-            #        # First try normal parsing
-            #       client_data = json.loads(json_str)
-            #    except json.JSONDecodeError as e:
-            #       try:
-            #            # If that fails, try replacing escaped quotes
-             #           fixed_json_str = json_str.replace('\\"', '"')
-              #          client_data = json.loads(fixed_json_str)
-               ##        st.success("Fixed JSON formatting automatically")
-                 #   except json.JSONDecodeError as e2:
-                  ##     st.error(f"Invalid JSON: {str(e2)}")
-            
-    
-            # Only add to other_doc if we have a valid filename and client data
-            #if client_data:
-            #    other_doc[json_filename] = client_data
-
-            
             with st.form("client_create_form"):
                 # Submit buttons for the form
                 submit_button = st.form_submit_button("Create/Update Client")
@@ -1074,11 +1050,11 @@ elif page == "Create 1hat patient":
             if submit_button:
                 if not client_name:
                     st.error("Please enter a client name")
-                elif not json_str:
+                elif not client_data:
                     st.error("Please enter JSON data")
                 else:
                     # Check if we've already processed this submission
-                    submission_key = f"{client_name}_{hash(json_str)}"
+                    submission_key = f"{client_name}_{hash(client_data)}"
                     if "last_client_submission" not in st.session_state or st.session_state["last_client_submission"] != submission_key:
                         # Create other_doc with client data using the filename as the key
                         
@@ -1088,7 +1064,7 @@ elif page == "Create 1hat patient":
                             domain_name,
                             selected_expert, 
                             client_name, 
-                            json_str, 
+                            client_data, 
                             org_client_id, 
                             doc_pairs, 
                             pdf_documents, 
