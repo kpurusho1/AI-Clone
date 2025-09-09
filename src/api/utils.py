@@ -1721,7 +1721,7 @@ async def get_assistant_response(thread_id: str, run_id: str):
         run_id: ID of the run
         
     Returns:
-        Assistant's response text
+        Assistant's response text with source citations removed
     """
     try:
         print(f"[DEBUG] get_assistant_response: Getting response from run {run_id}")
@@ -1744,10 +1744,16 @@ async def get_assistant_response(thread_id: str, run_id: str):
             if content_item.type == "text":
                 response_text += content_item.text.value
         
-        return response_text
+        # Remove source citations like 【4:6†source】 using regex
+        import re
+        cleaned_response = re.sub(r'【\d+:\d+†source】', '', response_text)
+        
+        print(f"[DEBUG] get_assistant_response: Removed source citations from response")
+        return cleaned_response
     except Exception as e:
         print(f"[ERROR] get_assistant_response: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error getting assistant response: {str(e)}")
+
 
 async def query_expert_with_assistant(org_id: UUID, expert_id: UUID, expert_name: str, domain_name: str, client_id: UUID, query: str, memory_type: str = "expert", thread_id: str = None):
     """

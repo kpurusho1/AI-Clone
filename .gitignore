@@ -46,3 +46,6 @@ Thumbs.db
 # Git backup
 .git.bak/
 .git.bak.main/
+
+# Docs
+Docs/
