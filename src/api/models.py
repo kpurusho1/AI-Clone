@@ -1,6 +1,21 @@
 from typing import Dict, Optional, Any, List
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from uuid import UUID
+from datetime import datetime
+
+class PatientCreate(BaseModel):
+    org_name: str
+    domain_name: str
+    expert_name: str
+    client_name: str
+    org_client_id: int
+    client_data_jsonb: str
+    consultation_id: str
+    created_time: str = Field(..., description="Timestamp with timezone in ISO 8601 format (e.g., '2025-09-07T13:27:42.809634+00:00')")
+    org_data_jsonb: Dict[str, Any] = {}
+    document_urls: Dict[str, str] = {}
+    pdf_documents: Dict[str, str] = {}
+    other_doc: Dict[str, Any] = {}
 
 class ClientCreate(BaseModel):
     org_client_id: int
@@ -9,6 +24,8 @@ class ClientCreate(BaseModel):
     client_id: Optional[UUID] = None
     client_name: str
     client_data_jsonb: Dict[str, Any]  # JSON data for the client
+    consultation_id: str
+    created_time: str = Field(..., description="Timestamp with timezone in ISO 8601 format (e.g., '2025-09-07T13:27:42.809634+00:00')")
 
 class CreateVector(BaseModel):
     memory_type: str = "expert"  # Options: "llm", "organization", "domain", "expert", "client", "myclient"
@@ -21,9 +38,9 @@ class CreateVector(BaseModel):
 class DeleteVectorRequest(BaseModel):
     memory_type: str = "expert"  # Options: "llm", "organization", "domain", "expert", "client", "myclient"
     domain_name: Optional[str] = None
-    client_id: Optional[UUID] = None
-    org_id: UUID
-    expert_id: Optional[UUID] = None
+    org_client_id: Optional[int] = None
+    org_name: str
+    expert_name: Optional[str] = None
     vector_id: Optional[str] = None
     delete_id: Optional[str] = None
 
@@ -69,7 +86,6 @@ class FilesConfigRequest(BaseModel):
 
 class InitializeExpertMemoryRequest(BaseModel):
     org_id: UUID
-    expert_id: UUID
     expert_name: str
     domain_name: List[str]
     qa_pairs: list  # List of dictionaries with question and answer pairs
@@ -87,16 +103,19 @@ class InitializeOrgMemoryRequest(OrgCreate):
     pdf_documents: Dict[str, str] = {}  # Dictionary of document name to file_path
     other_doc: Dict[str, Any] = {}  # Dictionary of document name to file_path
 
+class JsonStringRequest(BaseModel):
+    json_string: str
+
 class PersonaGenerationRequest(BaseModel):
     qa_pairs: list  # List of dictionaries with question and answer pairs
 
 class QueryRequest(BaseModel):
     query: str
-    memory_type: str = "expert"  # Options: "llm", "organization", "domain", "expert", "client", "myclient"
-    org_id: UUID
+    memory_type: str = "myclient"  # Options: "llm", "organization", "domain", "expert", "client", "myclient"
+    org_name: str
     domain_name: Optional[str] = None
     expert_id: Optional[UUID] = None
-    client_id: Optional[UUID] = None
+    org_client_id: Optional[int] = None
     thread_id: Optional[str] = None
     expert_name: Optional[str] = None
 
@@ -104,15 +123,18 @@ class UpdateExpertPersonaRequest(BaseModel):
     expert_id: UUID
     qa_pairs: list  # List of dictionaries with question and answer pairs
 
-class UpdateRequest(CreateVector):
+class UpdateRequest(BaseModel):
+    memory_type: str = "myclient"  # Options: "llm", "organization", "domain", "expert", "client", "myclient"
+    org_name: str
+    domain_name: Optional[str] = None
     expert_name: str
+    org_client_id: Optional[int] = None
     qa_pairs: Optional[list] = []  # List of dictionaries with question and answer pairs (optional)
     document_urls: Dict[str, str] = {}  # Dictionary of document name to URL mappings
     pdf_documents: Optional[Dict[str, str]] = None  # Dictionary of document name to file_path
     other_doc: Optional[Dict[str, Any]] = None  # Dictionary of document name to file_path
 
 class UpdateVectorStoreRequest(CreateVector):
-    expert_name: Optional[str] = None
     document_urls: Dict[str, str] = {}  # Dict of document_name: document_url
     pdf_documents: Optional[Dict[str, str]] = None  # Dictionary of document name to file_path
     other_doc: Optional[Dict[str, Any]] = None  # Dictionary of document name to file_path  

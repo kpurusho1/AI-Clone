@@ -4,12 +4,13 @@ from typing import List, Optional, Dict, Any
 import json
 import os
 import shutil
+import random
 import copy
 from uuid import UUID
 from database import supabase
 from models import (
     Expert, ExpertUpdate,
-    QueryRequest, 
+    QueryRequest, JsonStringRequest,
     DeleteVectorRequest, DomainBatchCreate,
     DomainCreate, DomainFilesRequest,
     FilesConfigRequest, PersonaGenerationRequest,
@@ -17,7 +18,7 @@ from models import (
     UpdateExpertPersonaRequest,InitializeExpertMemoryRequest,
     InitializeMyClientMemoryRequest, CreateVector,
     UpdateRequest, ClientCreate, OrgCreate,
-    InitializeOrgMemoryRequest
+    InitializeOrgMemoryRequest, PatientCreate
 )
 
 from utils import (
@@ -33,7 +34,7 @@ from utils import (
     parse_domain_config_file,
     update_expert_with_domains,
     update_domains_with_experts,
-    check_document_urls
+    check_document_urls, get_file_ids
 )
 
 router = APIRouter()
@@ -50,21 +51,15 @@ async def initialize_org_memory(request: InitializeOrgMemoryRequest):
         print(f"Initializing memory for client: {request.org_name}")
         results = {}
         org_doc = {}
+        org_data_jsonb = request.org_data_jsonb if request.org_data_jsonb else {}
 
         # Step 1: Create org if org doesn't exist
         print("Step 1: Creating org if org doesn't exist")
-        org_request = OrgCreate(org_name=request.org_name, org_data_jsonb=request.org_data_jsonb)
+        org_request = OrgCreate(org_name=request.org_name, org_data_jsonb=org_data_jsonb)
         org_result = await create_update_org(org_request)
         org_id = org_result["org_id"]
         org_data = org_result["org_data"]
     
-        # Step 2: Create org vector store if it doesn't exist
-        print("Step 2: Create org vector store if it doesn't exist")
-        org_vs_request = CreateVector(memory_type = 'organization', org_id=org_id)
-        org_vs_result = await create_or_get_vector(org_vs_request)
-        org_vector_id = org_vs_result["vector_id"]
-
-       
         # Create a filename with date_time, expert_name and client_name
         if org_data:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -72,31 +67,39 @@ async def initialize_org_memory(request: InitializeOrgMemoryRequest):
             
             org_doc[org_doc_name] = org_data
 
-        # Step 3: Add files to org vector store
-        print("Step 3: Adding files to org vector store")
-        org_request = FilesConfigRequest(
-            memory_type = 'organization',
-            vector_id=org_vector_id,
-            org_id=org_id,
-            document_urls=request.document_urls,
-            pdf_documents=request.pdf_documents
-        )
-        await add_files_to_vector(org_request)
+        if (request.document_urls or request.pdf_documents or org_doc):
+            # Step 2: Create org vector store if it doesn't exist
+            print("Step 2: Create org vector store if it doesn't exist")
+            org_vs_request = CreateVector(memory_type = 'organization', org_id=org_id)
+            org_vs_result = await create_or_get_vector(org_vs_request)
+            org_vector_id = org_vs_result["vector_id"]
+ 
+            # Step 3: Add files to org vector store
+            print("Step 3: Adding files to org vector store")
+            org_request = FilesConfigRequest(
+                memory_type = 'organization',
+                vector_id=org_vector_id,
+                org_id=org_id,
+                document_urls=request.document_urls,
+                pdf_documents=request.pdf_documents,
+                other_doc = org_doc
+            )
+            await add_files_to_vector(org_request)
         
         return {
             "org_name": request.org_name,
             "org_id": org_id,
             "status": "success",
-            "message": f"Successfully initialized memory for org {request.org_name}",
+            "message": f"Successfully created org in clone {request.org_name}",
         }
     except Exception as e:
-        print(f"Error initializing org memory: {str(e)}")
+        print(f"Error creating org in clone: {str(e)}")
         # Return partial success with details about what succeeded and what failed
         return {
             "org_name": request.org_name,
             "org_id": org_id,
             "status": "partial_success",
-            "message": f"Partially initialized memory for org {request.org_name}. Some steps may have failed: {str(e)}",
+            "message": f"Partially created org in clone {request.org_name}. Some steps may have failed: {str(e)}",
         }
 
 # Create domain vectors and add files for multiple domains
@@ -129,33 +132,33 @@ async def initialize_domains(request: DomainBatchCreate):
             
             # Step 1: Create domain or get existing domain
             domain_request = DomainCreate(org_id=request.org_id, domain_name=domain_name)
-            domain_result = await create_or_get_domain_vector(domain_request)
+            domain_result = await create_or_get_domain(domain_request)
             domain_id = domain_result["domain_id"]
-            vector_id = domain_result["vector_id"]
+            vector_id = None
+
+            if(document_urls or pdf_documents or other_doc):
+                vector_id_result = await create_or_get_vector(CreateVector(memory_type="domain", org_id=request.org_id, domain_name=domain_name))
+                vector_id = vector_id_result.get("vector_id") if vector_id_result else None
+                
+                # Step 2: Add files to domain vector
+                config_request = FilesConfigRequest(
+                    memory_type='domain',
+                    org_id=request.org_id,
+                    domain_name=domain_name,
+                    domain_id=domain_id,
+                    vector_id=vector_id,
+                    document_urls=document_urls,
+                    pdf_documents=pdf_documents,
+                    other_doc=other_doc
+                )
             
-            # Step 2: Add files to domain vector
-            config_request = FilesConfigRequest(
-                memory_type='domain',
-                org_id=request.org_id,
-                domain_name=domain_name,
-                domain_id=domain_id,
-                vector_id=vector_id,
-                document_urls=document_urls,
-                pdf_documents=pdf_documents,
-                other_doc=other_doc
-            )
-            
-            domain_files_result = await add_files_to_vector(config_request)
+                domain_files_result = await add_files_to_vector(config_request)
             
             # Add results for this domain
             domain_result = {
                 "domain_name": domain_name,
                 "domain_id": domain_id,
                 "vector_id": vector_id,
-                "file_count": len(document_urls) + len(pdf_documents),
-                "file_ids": domain_files_result.get("file_ids", []),
-                "batch_id": domain_files_result.get("batch_id"),
-                "status": domain_files_result.get("status")
             }
             
             results["domains"].append(domain_result)
@@ -210,7 +213,7 @@ async def get_domain_documents(request: DomainFilesRequest):
             domain_id = domain_result.data[0]["id"]
             
             # Step 2: Get documents where owner_id matches domain_id
-            documents_result = supabase.table("documents").select("name, document_link, openai_file_id").eq("owner_id", domain_id).execute()
+            documents_result = supabase.table("documents").select("name, document_link, openai_file_id").eq("owner_id", str(domain_id)).execute()
             
             domain_info = {
                 "domain_name": domain_name,
@@ -265,17 +268,21 @@ async def initialize_expert_memory(request: InitializeExpertMemoryRequest):
 
         # Step 1: Generate persona from QA data
         print("Step 1: Generating persona from QA data")
-        qa_pairs = request.qa_pairs if request.qa_pairs else []
-        persona_request = PersonaGenerationRequest(qa_pairs=qa_pairs)
-        persona_result = await generate_persona_from_qa_data(persona_request)
-        results["persona"] = persona_result
-        print(f"Persona result: {persona_result}")
-        
-        # Step 2: Create expert with generated persona
-        print("Step 2: Creating expert with generated persona")
-        persona_text = persona_result.get("persona", "")
+        if request.qa_pairs:
+            persona_request = PersonaGenerationRequest(qa_pairs=request.qa_pairs)
+            persona_result = await generate_persona_from_qa_data(persona_request)
+            persona_text = persona_result.get("persona", "")
+            results["persona"] = persona_result
+            print(f"Persona result: {persona_result}")
+        else:
+            persona_text = ""
+            results["persona"] = ""
+            
         if not persona_text:
             print("Warning: Generated persona is empty")
+        
+        # Step 2: Create expert with generated persona
+        print("Step 2: Creating expert")
             
         expert_request = Expert(
             name=request.expert_name,
@@ -283,15 +290,11 @@ async def initialize_expert_memory(request: InitializeExpertMemoryRequest):
             context=persona_text,  # Use the generated persona as context
             org_id=request.org_id
         )
-        expert_result = await create_or_get_expert_vector(expert_request)
+        expert_result = await create_or_get_expert(expert_request)
         if not expert_result:
             raise ValueError("Failed to create or get expert vector")
-            
         expert_id = expert_result.get("expert_id")
-        vector_id = expert_result.get("vector_id")
-        
-        if not expert_id or not vector_id:
-            raise ValueError("Expert creation succeeded but returned invalid ID or vector ID")
+
         
         # Step 3: Add files to expert vector
         print("Step 3: Adding files to expert vector")
@@ -300,20 +303,31 @@ async def initialize_expert_memory(request: InitializeExpertMemoryRequest):
         pdf_documents = request.pdf_documents if request.pdf_documents else {}
         other_doc = request.other_doc if request.other_doc else {}
         
-        expert_files_request = FilesConfigRequest(
-            memory_type='expert',
-            expert_id=expert_id,
-            org_id=request.org_id,
-            vector_id=vector_id,
-            document_urls=document_urls,
-            pdf_documents=pdf_documents,
-            other_doc=other_doc
-        )
-        expert_files_result = await add_files_to_vector(expert_files_request)
-        print(f"Expert files result: {expert_files_result}")
+        if (document_urls or pdf_documents or other_doc):
+            # Create a vector store for the new expert
+            vector_id_result = await create_or_get_vector(CreateVector(memory_type="expert", org_id=expert.org_id, expert_id=expert_id))
+            vector_id = vector_id_result.get("vector_id") if vector_id_result else None
+            print(f"Created new vector ID for new expert: {vector_id}")
+        
+            if not expert_id or not vector_id:
+                raise ValueError("Expert creation succeeded but returned invalid ID or vector ID")
+        
+
+            expert_files_request = FilesConfigRequest(
+                memory_type='expert',
+                expert_id=expert_id,
+                org_id=request.org_id,
+                vector_id=vector_id,
+                document_urls=document_urls,
+                pdf_documents=pdf_documents,
+                other_doc=other_doc
+            )
+            expert_files_result = await add_files_to_vector(expert_files_request)
+            print(f"Expert files result: {expert_files_result}")
         
         return {
             "expert_name": request.expert_name,
+            "expert_id": expert_id,
             "status": "success",
             "message": f"Successfully initialized memory for expert {request.expert_name} in domain {request.domain_name}",
             "results": results
@@ -323,6 +337,7 @@ async def initialize_expert_memory(request: InitializeExpertMemoryRequest):
         # Return partial success with details about what succeeded and what failed
         return {
             "expert_name": request.expert_name,
+            "expert_id": expert_id,
             "status": "partial_success",
             "message": f"Partially initialized memory for expert {request.expert_name}. Some steps may have failed: {str(e)}",
             "results": results
@@ -357,17 +372,24 @@ async def initialize_client_memory(request: InitializeMyClientMemoryRequest):
             raise ValueError("expert_id is required")
         if not request.org_client_id:
             raise ValueError("org_client_id is required")
+        if not request.client_data_jsonb:
+            raise ValueError("client_data_jsonb is required")
+        if not request.consultation_id:
+            raise ValueError("consultation_id is required")
+        if not request.created_time:
+            raise ValueError("created_time is required")
             
-        print(f"Initializing memory for client: {request.client_name}")
-
         # Step 1: Create client if client doesn't exist
         print("Step 1: Creating client if client doesn't exist")
+        
         client_request = ClientCreate(
             org_client_id=request.org_client_id, 
             org_id=request.org_id, 
             expert_id=request.expert_id, 
             client_name=request.client_name, 
-            client_data_jsonb=request.client_data_jsonb if request.client_data_jsonb else {}
+            client_data_jsonb=request.client_data_jsonb,
+            consultation_id=request.consultation_id,
+            created_time=request.created_time if request.created_time else "",
         )
         client_result = await create_update_client(client_request)
         
@@ -417,15 +439,12 @@ async def initialize_client_memory(request: InitializeMyClientMemoryRequest):
         if not expert_client_vector_id:
             raise ValueError("Expert client vector store creation succeeded but returned invalid vector ID")
        
-        # Create a filename with date_time, expert_name and client_name
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        
         # Prepare expert client document
-        expert_client_doc_name = f"{timestamp}_{request.expert_id}_{expert_client_id}"
+        expert_client_doc_name = f"{request.consultation_id}_{request.expert_id}_{expert_client_id}"
         expert_client_doc = {expert_client_doc_name: expert_client_data}   
 
         # Prepare overall client document
-        overall_doc_name = f"{timestamp}_{request.org_id}_{overall_client_id}"
+        overall_doc_name = f"{request.consultation_id}_{request.org_id}_{overall_client_id}"
         overall_doc = {overall_doc_name: overall_client_data}
 
         # Step 3: Add files to overall client vector store
@@ -480,20 +499,143 @@ async def initialize_client_memory(request: InitializeMyClientMemoryRequest):
             "results": results
         }
 
-@router.post("/query_expert_with_assistant")
-async def query_expert_with_assistant_endpoint(request: QueryRequest):
+@router.post("/1hat/add-patient", response_model=dict)
+async def initialize_1hat_patient(request: PatientCreate):
+    org_id = None
+    expert_id = None
+    client_id = None
+
+    try:
+        # Validate required request fields
+        if not request.org_name:
+            raise ValueError("Hospital Name is required")
+        if not request.domain_name:
+            raise ValueError("Specialty is required")
+        if not request.expert_name:
+            raise ValueError("Doctor Name is required")
+        if not request.client_name:
+            raise ValueError("Patient Name is required")
+        if not request.org_client_id:
+            raise ValueError("1hat patient ID is required")
+        if not request.client_data_jsonb:
+            raise ValueError("Patient Data is required")
+        if not request.consultation_id:
+            raise ValueError("Patient Consultation ID is required")
+        if not request.created_time:
+            raise ValueError("Record Created Time is required")
+            
+        print("Initializing org")
+        inputs = InitializeOrgMemoryRequest(
+            org_name=request.org_name,
+            org_data_jsonb={},
+            document_urls={},
+            pdf_documents={},
+            other_doc={}
+        )
+        try:
+            org_result = await initialize_org_memory(inputs)
+            if not org_result or "org_id" not in org_result:
+                print(f"Error: initialize_org_memory returned invalid result: {org_result}")
+                raise ValueError(f"Failed to initialize organization: invalid result")
+                
+            org_id = org_result.get("org_id")
+            print(f"Successfully initialized org with ID: {org_id}")
+        except Exception as e:
+            print(f"Error in initialize_org_memory: {str(e)}")
+            raise ValueError(f"Failed to initialize organization: {str(e)}")
+
+        print("Initializing domain")
+        inputs = DomainBatchCreate(
+            org_id=org_id,
+            domains=[{
+                "domain_name": request.domain_name,
+                "document_urls": {},
+                "pdf_documents": {},
+                "other_doc": {}
+            }]
+        )
+        domain_result = await initialize_domains(inputs)
+        domain_id = domain_result.get("domains")[0].get("domain_id")
+
+        print("Initializing expert")
+        inputs = InitializeExpertMemoryRequest(
+            org_id=org_id,
+            domain_name = [request.domain_name],
+            expert_name=request.expert_name,
+            qa_pairs=[],
+            document_urls={},
+            pdf_documents={},
+            other_doc={}
+        )
+        expert_result = await initialize_expert_memory(inputs)
+        expert_id = expert_result.get("expert_id")
+
+        client_data_raw=request.client_data_jsonb if request.client_data_jsonb else "{}"
+        # Create a JsonStringRequest object to pass to parse_json_string
+        json_request = JsonStringRequest(json_string=client_data_raw)
+        client_data_jsonb=await parse_json_string(json_request)
+
+        print("Initializing client")
+        inputs = InitializeMyClientMemoryRequest(
+            org_id=org_id,
+            expert_id=expert_id,
+            org_client_id=request.org_client_id,
+            client_name=request.client_name,
+            client_data_jsonb=client_data_jsonb,
+            consultation_id=request.consultation_id,
+            created_time=request.created_time if request.created_time else "",
+            document_urls={},
+            pdf_documents={},
+            other_doc={},
+        )
+        client_result = await initialize_client_memory(inputs)
+        client_id = client_result.get("org_client_id")
+        return {
+            "status": "success",
+            "message": "Successfully initialized 1hat patient memory"
+        }
+    except Exception as e:
+        print(f"Error initializing 1hat patient memory: {str(e)}")
+        return {
+            "status": "error",
+            "message": f"Error initializing 1hat patient memory: {str(e)}"
+        }
+        
+@router.post("/query-clone")
+async def query_clone(request: QueryRequest):
     """
     Query an expert using the OpenAI Assistant API
     """
     try:
         thread_id = request.thread_id if hasattr(request, 'thread_id') else None
+        org_id = None
+        if request.org_name:
+            org_id = await get_org_id(request.org_name)
+            print (f"[API DEBUG] query_clone: Organization ID: {org_id}")
+        if not org_id:
+            raise HTTPException(status_code=404, detail="Organization not found")
+        
+        expert_id = None
+        if request.expert_name:
+            expert_id = await get_expert_id(org_id, request.domain_name, request.expert_name)
+            print (f"[API DEBUG] query_clone: Expert ID: {expert_id}")
+            if not expert_id:
+                raise HTTPException(status_code=404, detail="Expert not found")
+
+        client_id = None
+        if (request.memory_type == "client" or request.memory_type == "myclient"):
+            print (f"[API DEBUG] query_clone: OrgClient ID: {request.org_client_id}")
+            client_id = await get_client_id(org_id, request.org_client_id, expert_id, request.memory_type)
+            print (f"[API DEBUG] query_clone: Client ID: {client_id}")
+            if not client_id:
+                raise HTTPException(status_code=404, detail="Client not found")
         
         result = await query_expert_with_assistant(
-            org_id=request.org_id,
-            expert_id=request.expert_id,
+            org_id=org_id,
+            expert_id=expert_id,
             expert_name=request.expert_name,
             domain_name=request.domain_name,
-            client_id=request.client_id,
+            client_id=client_id,
             query=request.query,
             memory_type=request.memory_type,
             thread_id=thread_id
@@ -516,12 +658,30 @@ async def update(request: UpdateRequest):
     try:        
         results = {}
         
+        org_id = None
+        if request.org_name:
+            org_id = await get_org_id(request.org_name)
+        if not org_id:
+            raise HTTPException(status_code=404, detail="Organization not found")
+        
+        expert_id = None
+        if request.expert_name:
+            expert_id = await get_expert_id(org_id, request.domain_name, request.expert_name)
+            if not expert_id:
+                raise HTTPException(status_code=404, detail="Expert not found")
+
+        client_id = None
+        if (request.memory_type == "client" or request.memory_type == "myclient"):
+            client_id = await get_client_id(org_id, request.org_client_id, expert_id, request.memory_type)
+            if not client_id:
+                raise HTTPException(status_code=404, detail="Client not found")
+        
         print(f"[API DEBUG] update: Step 1: Creating or getting vector store")
         vector_request = CreateVector(
             memory_type = request.memory_type,
-            org_id=request.org_id,
-            expert_id=request.expert_id,
-            client_id=request.client_id,
+            org_id=org_id,
+            expert_id=expert_id,
+            client_id=client_id,
             domain_name=request.domain_name,
         )
         vector_result = await create_or_get_vector(vector_request)
@@ -530,9 +690,9 @@ async def update(request: UpdateRequest):
 
         # Step 2: Update entity with new context
         if request.qa_pairs:
-            print(f"[API DEBUG] update: Step 2: Updating expert {request.expert_id} with {len(request.qa_pairs)} QA pairs")
+            print(f"[API DEBUG] update: Step 2: Updating expert {expert_id} with {len(request.qa_pairs)} QA pairs")
             update_persona_request = UpdateExpertPersonaRequest(
-                expert_id=request.expert_id,
+                expert_id=expert_id,
                 qa_pairs=request.qa_pairs
             )
             try:
@@ -548,11 +708,10 @@ async def update(request: UpdateRequest):
         if request.document_urls or request.pdf_documents or request.other_doc:
             files_request = UpdateVectorStoreRequest(
                 memory_type = request.memory_type,
-                org_id=request.org_id,
+                org_id=org_id,
                 domain_name=request.domain_name,
-                expert_id=request.expert_id,
-                expert_name=request.expert_name,
-                client_id=request.client_id,
+                expert_id=expert_id,
+                client_id=client_id,
                 document_urls=request.document_urls,
                 pdf_documents=request.pdf_documents,
                 other_doc=request.other_doc
@@ -656,18 +815,20 @@ async def upload_pdf_file(file: UploadFile = File(...), pdf_name: str = Form(...
         raise HTTPException(status_code=500, detail=f"Failed to upload PDF: {str(e)}")
 
 @router.post("/parse-json-string")
-async def parse_json_string(json_string: str = Form(...)) -> dict:
+async def parse_json_string(request: JsonStringRequest) -> dict:
     try:
         # The content is a JSON string that needs to be parsed
-        json_str = json_string.strip()
+        json_str = request.json_string.strip()
                         
         # Parse the JSON string - it's a string containing escaped JSON
         if json_str.startswith('"') and json_str.endswith('"'):
             # This is a JSON string containing escaped JSON
             # First, parse the outer JSON string
             json_content = json.loads(json_str)
+            print(f"JSON content: {json_content}")
             # Then parse the inner JSON content
             sample_json = json.loads(json_content)
+            print(f"Sample JSON: {sample_json}")
         else:
             # Try to parse as a regular JSON object
             brace_count = 0
@@ -685,6 +846,7 @@ async def parse_json_string(json_string: str = Form(...)) -> dict:
             if end_pos > 0:
                 first_json = json_str[:end_pos]
                 sample_json = json.loads(first_json)
+                print(f"Sample JSON in not string: {sample_json}")
             else:
                 sample_json = {}
                         
@@ -731,61 +893,69 @@ async def parse_json_string(request: Dict[str, Any]) -> dict:
 #________Helper functions (potential APIs)________
 
 # Org creation function
-def history_preserving_merge(existing_data: Dict[str, Any], new_data: Dict[str, Any]) -> Dict[str, Any]:
+def history_preserving_merge(existing_data: Dict[str, Any], new_data: Dict[str, Any], new_consultation_id:str, new_created_time:str) -> Dict[str, Any]:
     """
-    Append new JSON data to history without replacing existing data.
-    This function:
-    1. Initializes a _history array if it doesn't exist
-    2. Adds a timestamped snapshot of both existing state and new data to the history
-    3. Returns the combined data structure with complete history preserved
-    
-    Args:
-        existing_data: The existing JSON data structure
-        new_data: The new JSON data to append
-        
-    Returns:
-        The combined data structure with history preserved
+    Preserve full history of updates.
+    - `_history` grows indefinitely, storing past states.
+    - Latest record also gets its own timestamp.
     """
-    # Create result structure
     result = {}
     
-    # Initialize history if it doesn't exist
-    if "_history" not in result:
-        result["_history"] = []
-    
-    # Add timestamp for this update
-    timestamp = datetime.now().isoformat()
-    
-    # If existing data has history, copy it to result
-    if "_history" in existing_data:
-        result["_history"] = copy.deepcopy(existing_data["_history"])
-    
-    # Store existing data as a snapshot if it's not empty (excluding _history)
-    existing_data_copy = copy.deepcopy(existing_data)
-    if "_history" in existing_data_copy:
-        del existing_data_copy["_history"]
-    
-    if existing_data_copy:  # Only add if there's actual data besides _history
-        result["_history"].append({
-            "timestamp": timestamp,
-            "data": existing_data_copy
-        })
-    
-    # Store new data as the latest snapshot
-    result["_history"].append({
-        "timestamp": timestamp,
-        "data": copy.deepcopy(new_data)
-    })
-    
-    # Copy all non-history fields from existing data
-    for key, value in existing_data.items():
-        if key != "_history":
+    #check always if this is an update to existing consultation id in existing_data
+    if existing_data['consultation_id']==new_consultation_id:
+        #old_state.update(copy.deepcopy(new_data))
+        for key, value in new_data.items():
             result[key] = copy.deepcopy(value)
+        result['consultation_id']=new_consultation_id
+        result['created_time']=new_created_time
+        # Carry forward history if exists, else start fresh
+        result["_history"] = copy.deepcopy(existing_data.get("_history", []))
+        return result
+    elif "_history" in existing_data:
+        for i, item in enumerate(existing_data['_history']): # as existing_data['_history'] is a list
+            if item['consultation_id']==new_consultation_id:
+                # Carry forward history if exists, else start fresh
+                result = copy.deepcopy(existing_data)
+                
+                if result['_history'][i]['consultation_id']==new_consultation_id:
+                    result['_history'][i]['data'].update(copy.deepcopy(new_data))
+                    print("Updated existing consultation id in history")
+                else:
+                    print("Error: Consultation ID does not match between existing and new history to update")
+                
+                return result
     
-    # Add all fields from new data (this will overwrite existing fields)
+    # Carry forward history if exists, else start fresh
+    result["_history"] = copy.deepcopy(existing_data.get("_history", []))
+    #if not, then this is a new consultation id that needs to be appended
+    created_time = None
+    consultation_id = None
+    
+    # Add snapshot of old state to history (excluding its _history) and placing consultation id and created time at top of dictionary
+    old_state = copy.deepcopy(existing_data)
+    if "_history" in old_state:
+        del old_state["_history"]
+    if "created_time" in old_state:
+        created_time = old_state["created_time"]
+        del old_state["created_time"]
+    if "consultation_id" in old_state:
+        consultation_id = old_state["consultation_id"]
+        del old_state["consultation_id"]
+
+    if old_state:
+        result["_history"].append({
+            "created_time": created_time,
+            "consultation_id": consultation_id,
+            "data": old_state
+        })
+
+    # Add new data as latest record with timestamp
+    # result.update(copy.deepcopy(new_data)) -> Same result as below and much more efficient but less understandable
     for key, value in new_data.items():
         result[key] = copy.deepcopy(value)
-    
+    result["created_time"] = new_created_time
+    result["consultation_id"] = new_consultation_id
+
     return result
 
 def deep_merge(existing_data: Dict[str, Any], new_data: Dict[str, Any]) -> Dict[str, Any]:
@@ -848,35 +1018,51 @@ async def create_update_org(request: OrgCreate):
         org_name = request.org_name
         if (request.org_data_jsonb):
             org_data_jsonb = request.org_data_jsonb
-        
+        print("Checking if org exist ", org_name)
         # Check if org already exists
         org_check = supabase.table("organizations").select("*").eq("org_name", org_name).execute()
         
-        if len(org_check.data) > 0 and org_data_jsonb:
-            # Update existing org using history-preserving merge
+        if len(org_check.data) > 0:
+            # Organization already exists
+            print("Updating existing org", org_name)
+            existing_org_id = org_check.data[0]["id"]
             existing_org_data_jsonb = org_check.data[0]["org_data_jsonb"]
             
-            # Apply history-preserving merge
-            merged_data = history_preserving_merge(existing_org_data_jsonb, org_data_jsonb)
-            
-            # Convert to string for storage
-            org_data_str = json.dumps(merged_data)
-            
-            update_result = supabase.table("organizations").update({
-                "org_data": org_data_str,
-                "org_data_jsonb": merged_data
-                # Let the database handle the updated_at timestamp automatically
-            }).eq("org_name", org_name).execute()
-            
-            return {
-                "status": "success",
-                "message": f"Organization '{org_name}' updated successfully with history preservation",
-                "org_id": update_result.data[0]["id"],
-                "org_data": update_result.data[0]["org_data_jsonb"]
-            }
+            # If we have new data to merge
+            if org_data_jsonb:
+                # Apply history-preserving merge
+                if existing_org_data_jsonb:
+                    merged_data = history_preserving_merge(existing_org_data_jsonb, org_data_jsonb)
+                else:
+                    merged_data = org_data_jsonb
+                
+                # Convert to string for storage
+                org_data_str = json.dumps(merged_data)
+                
+                update_result = supabase.table("organizations").update({
+                    "org_data": org_data_str,
+                    "org_data_jsonb": merged_data
+                    # Let the database handle the updated_at timestamp automatically
+                }).eq("org_name", org_name).execute()
+                
+                return {
+                    "status": "success",
+                    "message": f"Organization '{org_name}' updated successfully with history preservation",
+                    "org_id": update_result.data[0]["id"],
+                    "org_data": update_result.data[0]["org_data_jsonb"]
+                }
+            else:
+                # Just return the existing org data without updating
+                return {
+                    "status": "success",
+                    "message": f"Organization '{org_name}' already exists",
+                    "org_id": existing_org_id,
+                    "org_data": existing_org_data_jsonb
+                }
         else:
             # Create new org
             # Initialize with history if it's a new org
+            print("Creating new org ", org_name)
             if org_data_jsonb:
                 # Add initial history entry
                 timestamp = datetime.now().isoformat()
@@ -921,6 +1107,8 @@ async def create_update_client(request: ClientCreate):
         # Initialize variables
         client_name = request.client_name
         org_client_id = request.org_client_id
+        consultation_id = request.consultation_id
+        created_time = request.created_time
         org_id = request.org_id
         expert_id = request.expert_id
         client_data_jsonb = None
@@ -928,6 +1116,7 @@ async def create_update_client(request: ClientCreate):
         if (request.client_data_jsonb):
             client_data_jsonb = request.client_data_jsonb
             client_data_str = json.dumps(client_data_jsonb)
+            print("Data received to update / append: ", client_data_jsonb)
         
         overall_result_client_data = None
         overall_result_client_id = None
@@ -939,10 +1128,13 @@ async def create_update_client(request: ClientCreate):
            # Check if client exists for that expert
         client_expert_check = supabase.table("clients").select("*").eq("client_name", client_name).eq("org_client_id", org_client_id).eq("org_id", org_id).eq("expert_id", expert_id).execute()
         
-        if client_check and len(client_check.data) > 0 and client_data_jsonb:
+        if client_check and len(client_check.data) > 0:
             # Get existing client data and update it with new data
+            print("Client exists for that org")
             existing_client_data_jsonb = client_check.data[0]["client_data_jsonb"]
-            merged_data = history_preserving_merge(existing_client_data_jsonb, client_data_jsonb)
+            merged_data = existing_client_data_jsonb
+            if client_data_jsonb:
+                merged_data = history_preserving_merge(existing_client_data_jsonb, client_data_jsonb, consultation_id, created_time)
             # Update existing client
             update_result = supabase.table("clients").update({
                 "client_data_jsonb": merged_data
@@ -965,10 +1157,13 @@ async def create_update_client(request: ClientCreate):
             overall_result_client_data = insert_result.data[0]["client_data_jsonb"]
             overall_result_client_id = insert_result.data[0]["id"]
         
-        if client_expert_check and len(client_expert_check.data) > 0 and client_data_jsonb:
+        if client_expert_check and len(client_expert_check.data) > 0:
             # Get existing client data and update it with new data
+            print("Updating existing expert client")
             existing_expert_client_data_jsonb = client_expert_check.data[0]["client_data_jsonb"]
-            merged_data = history_preserving_merge(existing_expert_client_data_jsonb, client_data_jsonb)
+            merged_data = existing_expert_client_data_jsonb
+            if client_data_jsonb:
+                merged_data = history_preserving_merge(existing_expert_client_data_jsonb, client_data_jsonb, consultation_id, created_time)
             # Update existing client
             update_result = supabase.table("clients").update({
                 "client_data_jsonb": merged_data
@@ -1081,7 +1276,7 @@ async def create_or_get_vector(request: CreateVector):
         raise HTTPException(status_code=500, detail=str(e))
 
 # Create domain - will create default vector store for domain
-async def create_or_get_domain_vector(domain_create: DomainCreate):
+async def create_or_get_domain(domain_create: DomainCreate):
     """
     Create a new domain with custom domain name or with domain from the enum DomainName
     Returns:
@@ -1108,43 +1303,28 @@ async def create_or_get_domain_vector(domain_create: DomainCreate):
         else:
             print(f"Domain id: {domain_id}")
         
-        vector_id_result = await create_or_get_vector(CreateVector(memory_type="domain", org_id=domain_create.org_id, domain_name=domain_create.domain_name))
-        vector_id = vector_id_result.get("vector_id") if vector_id_result else None
         return {
             "domain_id": domain_id,
-            "vector_id": vector_id,
-            "message": "Domain vector returned successfully"
+            "message": "Domain Id returned successfully"
             }
     except Exception as e:
         print(f"Error creating domain: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 # Create expert
-async def create_or_get_expert_vector(expert: Expert):
+async def create_or_get_expert(expert: Expert):
     """
     Create a new expert with domain and context
     """
     try:
         print(f"Creating expert with name: {expert.name}")
         expert_id = None
-        vector_id = None  # Initialize vector_id at the function level
         
         # Check if expert exists and is associated with the domains
         expert_exists = supabase.table("experts").select("*").eq("name", expert.name).eq("org_id", expert.org_id).execute()
         if expert_exists.data:
             print(f"Expert already exists: {expert_exists.data}. Update expert to modify")
-            expert_id = update_expert_with_domains(expert_exists.data[0], expert.domains)
-            
-            # Get the vector ID for the existing expert
-            vector_store = supabase.table("vector_stores").select("*").eq("expert_id", expert_id).execute()
-            if vector_store.data:
-                vector_id = vector_store.data[0].get("vector_id")
-                print(f"Found existing vector ID for expert: {vector_id}")
-            else:
-                # Create a vector store for the existing expert if it doesn't have one
-                vector_id_result = await create_or_get_vector(CreateVector(memory_type="expert", org_id=expert.org_id, expert_id=expert_id))
-                vector_id = vector_id_result.get("vector_id") if vector_id_result else None
-                print(f"Created new vector ID for existing expert: {vector_id}")
+            expert_id = await update_expert_with_domains(expert_exists.data[0], expert.domains)
         else:
             # Create expert data
             expert_data = {
@@ -1161,22 +1341,17 @@ async def create_or_get_expert_vector(expert: Expert):
             # Update domain with expert name
             await update_domains_with_experts(expert.name, expert.domains, expert.org_id)
             
-            # Create a vector store for the new expert
-            vector_id_result = await create_or_get_vector(CreateVector(memory_type="expert", org_id=expert.org_id, expert_id=expert_id))
-            vector_id = vector_id_result.get("vector_id") if vector_id_result else None
-            print(f"Created new vector ID for new expert: {vector_id}")
-        
+            
         # Validate that we have both IDs before returning
-        if not expert_id or not vector_id:
-            print(f"Warning: Missing IDs - expert_id: {expert_id}, vector_id: {vector_id}")
+        if not expert_id:
+            print(f"Warning: Missing IDs - expert_id: {expert_id}")
             
         return {
             "expert_id": expert_id,
-            "vector_id": vector_id,
             "message": f"Expert {expert.name} created successfully"
         }
     except Exception as e:
-        print(f"Error in create_or_get_expert_vector: {str(e)}")
+        print(f"Error in create_or_get_expert: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 # Add files to vector
@@ -1194,7 +1369,7 @@ async def add_files_to_vector(request: FilesConfigRequest):
         other_doc = request.other_doc
 
         if memory_type == 'domain':
-            owner_id = request.domain_id
+            owner_id = str(request.domain_id)
             domain_to_add = request.domain_name
             domain_data = await parse_domain_config_file(request.config_file_path)
             if not domain_data:
@@ -1208,13 +1383,13 @@ async def add_files_to_vector(request: FilesConfigRequest):
                     print(f"Domain '{domain_to_add}' not found in config file")
 
         elif memory_type == 'expert':
-            owner_id = request.expert_id
+            owner_id = str(request.expert_id)
         elif memory_type == 'client':
-            owner_id = request.client_id
+            owner_id = str(request.client_id)
         elif memory_type == 'organization' or memory_type == 'llm':
-            owner_id = request.org_id
+            owner_id = str(request.org_id)
         elif memory_type == 'myclient':
-            owner_id = request.expert_id + "_" + request.client_id
+            owner_id = str(request.expert_id) + "_" + str(request.client_id)
         
         if owner_id is None:
             raise HTTPException(status_code=400, detail="Invalid arguments for memory type")
@@ -1399,11 +1574,10 @@ async def update_vector_store(update_request: UpdateVectorStoreRequest):
         # Initialize document collections with empty defaults if not provided
         url_count = len(update_request.document_urls) if update_request.document_urls else 0
         pdf_count = len(update_request.pdf_documents) if update_request.pdf_documents else 0
-        total_docs = url_count + pdf_count
+        other_doc_count = len(update_request.other_doc) if update_request.other_doc else 0
+        total_docs = url_count + pdf_count + other_doc_count
         
-        expert_name = update_request.expert_name if hasattr(update_request, 'expert_name') and update_request.expert_name else "Unknown"
-        print(f"Updating vector store for {expert_name} with {total_docs} new documents ({url_count} URLs, {pdf_count} PDFs)")
-        print(f"Memory type: {update_request.memory_type}, Expert ID: {update_request.expert_id}, Domain: {update_request.domain_name}")
+        print(f"Updating vector store for {update_request.memory_type} with {total_docs} new documents ({url_count} URLs, {pdf_count} PDFs, {other_doc_count} Other Docs)")
         
         # Get vector store information
         print(f"Getting vector store ID for memory_type={update_request.memory_type}, org_id={update_request.org_id}, expert_id={update_request.expert_id}")
@@ -1463,16 +1637,18 @@ async def update_vector_store(update_request: UpdateVectorStoreRequest):
         # Set owner_id based on memory type with proper None checks
         owner_id = None
         if update_request.memory_type == 'domain' and update_request.domain_name:
-            owner_id = await get_domain_id(update_request.org_id, update_request.domain_name)
+            owner_id = str(await get_domain_id(update_request.org_id, update_request.domain_name))
         elif update_request.memory_type == 'expert' and update_request.expert_id:
-            owner_id = update_request.expert_id
-        elif (update_request.memory_type == 'client' or update_request.memory_type == 'myclient') and update_request.client_id:
-            owner_id = update_request.client_id
+            owner_id = str(update_request.expert_id)
+        elif update_request.memory_type == 'client' and update_request.client_id:
+            owner_id = str(update_request.client_id)
+        elif update_request.memory_type == 'myclient' and update_request.expert_id and update_request.client_id:
+            owner_id = str(update_request.expert_id) + "_" + str(update_request.client_id)
         elif (update_request.memory_type == 'organization' or update_request.memory_type == 'llm') and update_request.org_id:
-            owner_id = update_request.org_id
+            owner_id = str(update_request.org_id)
         
         if not owner_id:
-            owner_id = update_request.org_id  # Fallback to org_id if no specific owner is set
+            owner_id = str(update_request.org_id)  # Fallback to org_id if no specific owner is set
 
         # Call edit_vector_store with None checks
         if not vector_id:
@@ -1576,7 +1752,7 @@ async def update_vector_store(update_request: UpdateVectorStoreRequest):
 
 # Get details from database if required and Delete vector memory if required
 @router.get("/documents")
-async def get_documents(owner_id: Optional[UUID] = None):
+async def get_documents(owner_id: Optional[str] = None):
     """
     Get documents filtered by owner_id
     
@@ -1649,37 +1825,28 @@ async def get_documents_by_file_ids(file_ids: Optional[List[str]] = None):
         print(f"Error getting documents: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
-async def get_file_ids(vectorname: Optional[str] = None):
+async def get_org_id(org_name: str):
     """
-    Get file_ids filtered by vector_name
-    
-    Priority rules:
-    1. If vector_name is provided, return file_ids matching vector_name, else return all file_ids
+    Get organization ID by name
     """
     try:
-        
-        # Start building the query
-        query = supabase.table("vector_stores").select("*")
-        
-        if vectorname:
-            query = query.eq("vector_name", vectorname)
+        # Check if org_name is None or empty
+        if not org_name or org_name == "None":
+            print("Warning: org_name is None or empty")
+            return None
             
-        # Execute the query
-        result = query.execute()
+        print(f"Getting organization ID for: {org_name}")
+        result = supabase.table("organizations").select("id").eq("org_name", org_name).execute()
+        print(f"Found {len(result.data)} organizations")
         
-        # Check if result.data is a coroutine and await it if necessary
-        if hasattr(result, 'data'):
-            data = result.data
-            #print(f"Found {len(data)} vector stores")
-            if data and len(data) > 0:
-                return data[0].get("file_ids", [])
-            return []
+        if len(result.data) > 0:
+            return result.data[0].get("id")
         else:
-            print("No data attribute found in result")
-            return []
+            print(f"No organization found with name: {org_name}")
+            return None
     except Exception as e:
-        print(f"Error getting documents: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        print(f"Error getting organization ID: {str(e)}")
+        return None
 
 @router.get("/organization", response_model=List[dict])
 async def get_organization():
@@ -1694,6 +1861,78 @@ async def get_organization():
     except Exception as e:
         print(f"Error getting organizations: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
+
+async def get_client_id(org_id: UUID, org_client_id: int, expert_id: UUID = None, memory_type: str = "client"):
+    """
+    Get client ID by org_id, org_client_id, and optionally expert_id
+    """
+    try:
+        # Check for null or invalid values
+        if org_id is None or org_id == "None":
+            print("Warning: org_id is None or invalid")
+            return None
+            
+        if org_client_id is None or org_client_id == "None":
+            print("Warning: org_client_id is None or invalid")
+            return None
+            
+        
+        # Build the query
+        query = supabase.table("clients").select("id").eq("org_id", org_id).eq("org_client_id", org_client_id)
+        
+        # Add expert_id condition based on memory_type
+        if memory_type == "client":
+            query = query.is_("expert_id", "null")
+        elif expert_id is not None and expert_id != "None":
+            query = query.eq("expert_id", expert_id)
+
+        print(f"Getting client with org_id: {org_id}, org_client_id: {org_client_id}", "expert_id: ", expert_id)
+            
+        # Execute the query
+        result = query.execute()
+        print(f"Found {len(result.data)} clients")
+        
+        if result.data and len(result.data) > 0:
+            return result.data[0].get("id")
+        return None
+    except Exception as e:
+        print(f"Error getting clients: {str(e)}")
+        # Return None instead of raising an exception to make the function more robust
+        return None
+
+async def get_expert_id(org_id: UUID, domain_name: str, expert_name: str):
+    """
+    Get expert ID by org_id, domain_name, and expert_name
+    """
+    try:
+        # Check for null or invalid values
+        if org_id is None or org_id == "None":
+            print("Warning: org_id is None or invalid in get_expert_id")
+            return None
+            
+        if not domain_name or domain_name == "None":
+            print("Warning: domain_name is None or empty in get_expert_id")
+            return None
+            
+        if not expert_name or expert_name == "None":
+            print("Warning: expert_name is None or empty in get_expert_id")
+            return None
+            
+        print(f"Getting expert with org_id: {org_id}, domain_name: {domain_name}, expert_name: {expert_name}")
+        
+        # Build and execute the query
+        # For domains, we need to check if the domain_name is contained in the domains array
+        query = supabase.table("experts").select("id").eq("org_id", org_id).contains("domains", [domain_name]).eq("name", expert_name)
+        result = query.execute()
+        print(f"Found {len(result.data)} experts")
+        
+        if result.data and len(result.data) > 0:
+            return result.data[0].get("id")
+        return None
+    except Exception as e:
+        print(f"Error getting expert ID: {str(e)}")
+        # Return None instead of raising an exception to make the function more robust
+        return None
 
 @router.get("/clients", response_model=List[dict])
 async def get_clients(org_id: UUID, expert_id: UUID = None):
@@ -1968,12 +2207,29 @@ async def delete_vector_memory(request: DeleteVectorRequest):
     try:
         print(f"[DEBUG] delete_vector_memory: Request received with domain_name={request.domain_name}, "
               f"expert_name={request.expert_name}, client_name={request.client_name}")
+        org_id = None
+        if request.org_name:
+            org_id = await get_org_id(request.org_name)
+        if not org_id:
+            raise HTTPException(status_code=404, detail="Organization not found")
+        
+        expert_id = None
+        if request.expert_name:
+            expert_id = await get_expert_id(org_id, request.domain_name, request.expert_name)
+            if not expert_id:
+                raise HTTPException(status_code=404, detail="Expert not found")
+
+        client_id = None
+        if (request.memory_type == "client" or request.memory_type == "myclient"):
+            client_id = await get_client_id(org_id, request.org_client_id, expert_id, request.memory_type)
+            if not client_id:
+                raise HTTPException(status_code=404, detail="Client not found")
         
         vector_id = request.vector_id if request.vector_id else None
         vector_id_to_delete = request.delete_id if request.delete_id else None
         
         if not vector_id_to_delete:
-            delete_request = CreateVector(memory_type=request.memory_type, org_id=request.org_id, domain_name=request.domain_name, expert_id=request.expert_id, client_id=request.client_id)
+            delete_request = CreateVector(memory_type=request.memory_type, org_id=org_id, domain_name=request.domain_name, expert_id=expert_id, client_id=client_id)
             query, vector_name = await get_query_for_vector_store(delete_request)
             result = query.execute()
             if result.data and len(result.data) > 0:
