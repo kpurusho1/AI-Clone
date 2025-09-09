@@ -1456,7 +1456,7 @@ async def create_assistant(org_id: UUID, domain_name: str = None, expert_id: UUI
         print(f"Vector store query result: {vector_store_result.data}")
         
         vector_id = None
-        role = None
+        role = "You are an AI assistant"
         context = None
         if vector_store_result.data and len(vector_store_result.data) > 0:
             vector_id = vector_store_result.data[0].get("vector_id")
@@ -1464,7 +1464,7 @@ async def create_assistant(org_id: UUID, domain_name: str = None, expert_id: UUI
             print(f"[ERROR] create_assistant: Vector store not found")
             # Continue execution even if there's an error retrieving vector IDs    
         if expert_name != None:
-            role = "You are an AI assistant named " + expert_name
+            role = "You are named " + expert_name
             result = supabase.table("experts").select("context").eq("id", expert_id).execute()
             if not result.data:
                 raise HTTPException(status_code=404, detail=f"Expert {expert_id} not found")
@@ -1544,7 +1544,9 @@ async def get_or_create_assistant(org_id: UUID, domain_name: str = None, expert_
     """
     try:
         print(f"[DEBUG] get_or_create_assistant: Looking for assistant for expert '{expert_name}' with memory type '{memory_type}'")
-        domain_id = await get_domain_id(org_id, domain_name)
+        domain_id = None
+        if domain_name:
+            domain_id = await get_domain_id(org_id, domain_name)
         query = supabase.table("assistants").select("*").eq("memory_type", memory_type)
         match memory_type:
             case "llm" | "organization":

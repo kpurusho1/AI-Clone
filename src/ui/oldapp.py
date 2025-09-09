@@ -1967,118 +1967,62 @@ elif page == "Create Specialty":
     else:
         st.info("Please select an organization to create a specialty.")
             
-elif page == "Create Hospital":
-    st.title("Create Hospital")
+elif page == "Create Organization":
+    st.title("Create Organization")
     st.write("Create a hospital with its general information documents.")
     
     # Initialize session state variables
-    if "clear_hospital_form" in st.session_state and st.session_state["clear_hospital_form"]:
-        st.session_state["clear_hospital_form"] = False
+    if "clear_org_form" in st.session_state and st.session_state["clear_org_form"]:
+        st.session_state["clear_org_form"] = False
     
-    with st.form("hospital_specialty_form"):
-        st.subheader("Hospital Information")
+    with st.form("org_form"):
+        st.subheader("Organization Information")
         
-        # Hospital basic info
-        hospital_name = st.text_input("Hospital Name", key="hospital_name_input")
+        # Organization basic info
+        org_name = st.text_input("Organization Name", key="org_name_input")
         
-        # Hospital data (JSON)
-        st.subheader("Hospital Data (JSON)")
         
-        # Option to load sample JSON
-        sample_option = st.selectbox(
-            "Load sample hospital JSON",
-            ["None", "OrgSample 1", "OrgSample 2", "OrgSample 3"],
-            key="hospital_sample_json_select"
-        )
+        # Organization Documents Section
+        st.subheader("Organization Documents")
         
-        # Load sample JSON if selected
-        sample_json = {}
-        if sample_option != "None":
-            sample_num = sample_option.split()[-1]
-            try:
-                with open(f"/Users/karthi/CascadeProjects/AI Clone/Docs/orgsample{sample_num}.json", "r") as f:
-                    content = f.read()
-                    json_str = content.strip()
-                    brace_count = 0
-                    end_pos = 0
-                    
-                    for i, char in enumerate(json_str):
-                        if char == '{':
-                            brace_count += 1
-                        elif char == '}':
-                            brace_count -= 1
-                            if brace_count == 0:
-                                end_pos = i + 1
-                                break
-                    
-                    if end_pos > 0:
-                        first_json = json_str[:end_pos]
-                        sample_json = json.loads(first_json)
-                        st.success(f"Loaded {sample_option} JSON data")
-                    else:
-                        st.error("Could not find a complete JSON object")
-            except Exception as e:
-                st.error(f"Error loading sample JSON: {str(e)}")
+        # Create tabs for organization documents
+        org_doc_tabs = st.tabs(["Document URLs", "PDF Uploads"])
         
-        # JSON editor for hospital data
-        hospital_json_str = st.text_area(
-            "Edit Hospital JSON data",
-            value=json.dumps(sample_json, indent=2) if sample_json else "",
-            height=200,
-            key="hospital_json_input"
-        )
+        org_doc_pairs = {}
+        org_pdf_documents = {}
         
-        # Validate hospital JSON
-        valid_hospital_json = True
-        hospital_data = {}
-        if hospital_json_str:
-            try:
-                hospital_data = json.loads(hospital_json_str)
-            except json.JSONDecodeError as e:
-                valid_hospital_json = False
-                st.error(f"Invalid Hospital JSON: {str(e)}")
-        
-        # Hospital Documents Section
-        st.subheader("Hospital Documents")
-        
-        # Create tabs for hospital documents
-        hospital_doc_tabs = st.tabs(["Document URLs", "PDF Uploads"])
-        
-        hospital_doc_pairs = {}
-        hospital_pdf_documents = {}
-        
-        # Hospital URL Documents Tab
-        with hospital_doc_tabs[0]:
-            st.write("Hospital Document URLs")
-            num_hospital_docs = st.session_state.get('hospital_doc_inputs', 2)
+        # Organization URL Documents Tab
+        with org_doc_tabs[0]:
+            st.write("Organization Document URLs")
+            num_org_docs = st.session_state.get('org_doc_inputs', 2)
             
-            for i in range(num_hospital_docs):
+            for i in range(num_org_docs):
                 doc_cols = st.columns(2)
                 with doc_cols[0]:
-                    doc_name = st.text_input(f"Hospital Doc Name {i+1}", key=f"hospital_doc_name_{i}")
+                    doc_name = st.text_input(f"Organization Doc Name {i+1}", key=f"org_doc_name_{i}")
                 with doc_cols[1]:
-                    doc_url = st.text_input(f"Hospital Doc URL {i+1}", key=f"hospital_doc_url_{i}")
+                    doc_url = st.text_input(f"Organization Doc URL {i+1}", key=f"org_doc_url_{i}")
                 
                 if doc_name and doc_url:
-                    if doc_name not in hospital_doc_pairs:
-                        hospital_doc_pairs[doc_name] = doc_url
+                    if doc_name not in org_doc_pairs:
+                        org_doc_pairs[doc_name] = doc_url
                     else:
-                        st.warning(f"Hospital document name '{doc_name}' already exists.")
+                        st.warning(f"Organization document name '{doc_name}' already exists.")
         
-        # Hospital PDF Documents Tab
-        with hospital_doc_tabs[1]:
-            st.write("Upload Hospital PDF documents")
-            num_hospital_pdfs = st.session_state.get('hospital_pdf_uploads', 2)
+        # Organization PDF Documents Tab
+        with org_doc_tabs[1]:
+            st.write("Upload Organization PDF documents")
+            num_org_pdfs = st.session_state.get('org_pdf_uploads', 2)
             
-            for i in range(num_hospital_pdfs):
+            for i in range(num_org_pdfs):
                 pdf_cols = st.columns(2)
                 with pdf_cols[0]:
-                    pdf_name = st.text_input(f"Hospital PDF Name {i+1}", key=f"hospital_pdf_name_{i}")
+                    pdf_name = st.text_input(f"Organization PDF Name {i+1}", key=f"org_pdf_name_{i}")
                 with pdf_cols[1]:
-                    pdf_file = st.file_uploader(f"Upload Hospital PDF {i+1}", type=["pdf"], key=f"hospital_pdf_file_{i}")
+                    pdf_file = st.file_uploader(f"Upload Organization PDF {i+1}", type=["pdf"], key=f"org_pdf_file_{i}")
                 
                 if pdf_name and pdf_file is not None:
-                    if pdf_name not in hospital_pdf_documents and pdf_name not in hospital_doc_pairs:
+                    if pdf_name not in org_pdf_documents and pdf_name not in org_doc_pairs:
                         try:
                             files = {"file": (pdf_file.name, pdf_file, "application/pdf")}
                             data = {"pdf_name": pdf_name}
@@ -2091,68 +2035,65 @@ elif page == "Create Hospital":
                             
                             if response.status_code == 200:
                                 result = response.json()
-                                hospital_pdf_documents[pdf_name] = result["file_path"]
-                                st.success(f"Hospital PDF uploaded: {result['message']}")
+                                org_pdf_documents[pdf_name] = result["file_path"]
+                                st.success(f"Organization PDF uploaded: {result['message']}")
                             else:
-                                st.error(f"Failed to upload hospital PDF: {response.text}")
+                                st.error(f"Failed to upload organization PDF: {response.text}")
                         except Exception as e:
-                            st.error(f"Error uploading hospital PDF: {str(e)}")
+                            st.error(f"Error uploading organization PDF: {str(e)}")
                     else:
-                        st.warning(f"Hospital document name '{pdf_name}' already exists.")
+                        st.warning(f"Organization document name '{pdf_name}' already exists.")
         
         # Form submission buttons
         col1, col2 = st.columns(2)
         with col1:
-            submitted = st.form_submit_button("Create Hospital")
+            submitted = st.form_submit_button("Create Organization")
         with col2:
-            add_more_hospital_docs = st.form_submit_button("Add More Hospital Documents")
+            add_more_org_docs = st.form_submit_button("Add More Organization Documents")
     
-    # Handle adding more hospital documents
-    if add_more_hospital_docs:
-        st.session_state.hospital_doc_inputs = st.session_state.get('hospital_doc_inputs', 2) + 1
+    # Handle adding more organization documents
+    if add_more_org_docs:
+        st.session_state.org_doc_inputs = st.session_state.get('org_doc_inputs', 2) + 1
         st.experimental_rerun()
     
     # Process form submission
     if submitted:
-        if not hospital_name:
-            st.error("Please enter a hospital name")
-        elif hospital_json_str and not valid_hospital_json:
-            st.error("Please fix the hospital JSON errors before submitting")
+        if not org_name:
+            st.error("Please enter an organization name")
         else:
             # Check if we've already processed this submission
-            submission_key = f"{hospital_name}_{hash(hospital_json_str)}"
-            if "last_hospital_submission" not in st.session_state or st.session_state["last_hospital_submission"] != submission_key:
+            submission_key = f"{org_name}_{hash(org_json_str)}"
+            if "last_org_submission" not in st.session_state or st.session_state["last_org_submission"] != submission_key:
                 
-                with st.spinner("Creating hospital..."):
+                with st.spinner("Creating organization..."):
                     try:
-                        # Step 1: Create hospital organization with memory
-                        hospital_result, hospital_status = create_org_memory(
-                            org_name=hospital_name,
-                            org_data=hospital_data if hospital_data else {},
-                            document_urls=hospital_doc_pairs,
-                            pdf_documents=hospital_pdf_documents
+                        # Step 1: Create organization with memory
+                        org_result, org_status = create_org_memory(
+                            org_name=org_name,
+                            document_urls=org_doc_pairs,
+                            pdf_documents=org_pdf_documents
                         )
                         
-                        if hospital_status == 200:
-                            org_id = hospital_result.get("org_id")
-                            st.success(f"Hospital '{hospital_name}' created successfully!")
+                        if org_status == 200:
+                            org_id = org_result.get("org_id")
+                            st.success(f"Organization '{org_name}' created successfully!")
                             
                                     
                                     # Show detailed results
                             with st.expander("Creation Details"):
-                                st.write(f"**Hospital:** {hospital_name}")
+                                st.write(f"**Organization:** {org_name}")
                                 st.write(f"**Organization ID:** {org_id}")
-                                st.write(f"**Hospital Documents:** {len(hospital_doc_pairs) + len(hospital_pdf_documents)}")
+                                st.write(f"**Organization Documents:** {len(org_doc_pairs) + len(org_pdf_documents)}")
                                         
                                     
                                 # Store submission to prevent duplicates
-                                st.session_state["last_hospital_submission"] = submission_key
-                                st.session_state["clear_hospital_form"] = True
+                                st.session_state["last_org_submission"] = submission_key
+                                st.session_state["clear_org_form"] = True
                         else:
-                            st.error(f"Error creating hospital: {hospital_result.get('error', 'Unknown error')}")
+                            st.error(f"Error creating organization: {org_result.get('error', 'Unknown error')}")
                     
                     except Exception as e:
                         st.error(f"Error during creation process: {str(e)}")
             else:
                 st.info("Form already submitted. Refresh the page to submit again.")
-                del st.session_state["last_hospital_submission"]
+                del st.session_state["last_org_submission"]

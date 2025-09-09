@@ -108,7 +108,7 @@ class PersonaGenerationRequest(BaseModel):
 
 class QueryRequest(BaseModel):
     query: str
-    memory_type: str = "myclient"  # Options: "llm", "organization", "domain", "expert", "client", "myclient"
+    memory_type: str = "organization"  # Options: "llm", "organization", "domain", "expert", "client", "myclient"
     org_name: str
     domain_name: Optional[str] = None
     expert_id: Optional[UUID] = None
