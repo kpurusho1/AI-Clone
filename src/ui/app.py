@@ -211,7 +211,7 @@ st.sidebar.markdown("<h2 style='color: white; margin: 0; font-size: 1.5rem; text
 
 page = st.sidebar.radio(
     "Select a page:",
-    ["Create 1hat patient", "Assistant", "Update"]
+    ["Create 1hat patient", "Assistant", "Update", "Delete Vector"]
 )
 
 def get_domains(org_id):
@@ -986,7 +986,6 @@ elif page == "Update":
         if add_more_url:
             st.session_state.expert_update_doc_inputs = st.session_state.get('expert_update_doc_inputs', 3) + 1
             st.experimental_rerun()
-        
         if add_more_pdf:
             st.session_state.expert_update_pdf_uploads = st.session_state.get('expert_update_pdf_uploads', 3) + 1
             st.experimental_rerun()
@@ -1094,3 +1093,43 @@ elif page == "Create 1hat patient":
                         st.info("Form already submitted. Refresh the page to submit again.")
                         # Clear the submission tracking after showing the message
                         del st.session_state["last_client_submission"]
+
+elif page == "Delete Vector":
+    st.title("Delete Vector Memory")
+    st.write("Delete all vector memories for an organization. This action cannot be undone.")
+    
+    # Get all organizations
+    try:
+        response = requests.get(f"{API_BASE_URL}/api/organization")
+        if response.status_code == 200:
+            organizations = response.json()
+            org_options = ["--Select an organization--"] + [org["org_name"] for org in organizations]
+            
+            # Organization selection
+            selected_org = st.selectbox("Select Organization", org_options)
+            
+            if selected_org != "--Select an organization--":
+                # Add a confirmation checkbox
+                confirm_delete = st.checkbox("I understand this will permanently delete ALL vector memories for this organization")
+                
+                # Delete button with confirmation
+                if st.button("Delete Vector Memories", disabled=not confirm_delete):
+                    if confirm_delete:
+                        try:
+                            # Call the delete_org_vector_memory endpoint
+                            response = requests.delete(f"{API_BASE_URL}/api/vectors/memory-org", params={"org_name": selected_org})
+                            
+                            if response.status_code == 200:
+                                st.success(f"Successfully deleted all vector memories for {selected_org}")
+                            else:
+                                st.error(f"Failed to delete vector memories: {response.text}")
+                        except Exception as e:
+                            st.error(f"Error deleting vector memories: {str(e)}")
+                    else:
+                        st.warning("Please confirm deletion by checking the confirmation box")
+            else:
+                st.info("Please select an organization to delete its vector memories")
+        else:
+            st.error(f"Error fetching organizations: {response.text}")
+    except Exception as e:
+        st.error(f"Error: {str(e)}")
